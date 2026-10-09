@@ -3,10 +3,12 @@
  * store: getPosts() savePost(p) getStaff() saveStaff(s) getReads() addRead(r) [getSigs(postId)] addLog(e) getAdmin() setAdmin(a) secret()
  * files: upload(name,mime,b64) share(ids) revoke(ids) quota()
  * clock: { nowMs(), today() }
- * clockSrc（選用）: read() → { rows:[{src, unit, empId, name, active}], errors:[字串] }（打卡系統名單，唯讀） */
+ * clockSrc（選用）: read() → { rows:[{src, unit, empId, name, active, lineHash}], errors:[字串], sources:[來源] }（打卡系統名單，唯讀；
+ *   lineHash＝SHA-256('dzyb-line:' + LINE userId)，原始 userId 不離開 Apps Script）
+ * lineVerify（選用）: verify(idToken) → 驗證過的 LINE userId（sub）或 null（LINE ID token 驗證；Mac mini 用 async 墊片、GAS 用 UrlFetchApp、本機假資料認 'TEST:<uid>'） */
 'use strict';
 
-function makeService_(L, store, files, auth, clock, clockSrc) {
+function makeService_(L, store, files, auth, clock, clockSrc, lineVerify) {
   var ADMIN_TOKEN_MS = 7 * 24 * 3600e3;   // 主管登入記住 7 天（2026-09-30 Eason 指定；原 12 小時）
   function err(code, message) { var e = new Error(message || code); e.code = code; return e; }
   function iso() { return new Date(clock.nowMs()).toISOString(); }
@@ -59,6 +61,16 @@ function makeService_(L, store, files, auth, clock, clockSrc) {
     return prefix + s;
   }
 
+  // 打卡名單的 LINE 綁定 → 同仁 lineHash（只動 lineHash；比對規則在 L.lineHashUpdates，與 Mac mini 每小時工作共用）
+  function applyLineHash(got) {
+    var all = store.getStaff(), n = 0;
+    L.lineHashUpdates(all, got).forEach(function (u) {
+      var s = all.filter(function (x) { return x.id === u.id; })[0];
+      if (s) { s.lineHash = u.lineHash; if (u.bump) s.pinVer = (Number(s.pinVer) || 0) + 1; store.saveStaff(s); n++; }   // 解綁／改綁：pinVer+1 踢掉已登入的手機
+    });
+    return n;
+  }
+
   function boardFor(s) {
     var td = clock.today();
     var posts = store.getPosts().map(function (p) { return withStatus(p, td); })
@@ -90,6 +102,24 @@ function makeService_(L, store, files, auth, clock, clockSrc) {
         var e = err(r.code, r.code === 'LOCKED' ? '密碼錯誤太多次，已鎖定' : '密碼錯誤（還可以試 ' + r.left + ' 次）');
         e.left = r.left; throw e;
       }
+      return { token: auth.makeStaffToken(store.secret(), s.id, s.pinVer), me: me(s), board: boardFor(s) };
+    },
+    // LINE 自動登入（2026-10-09）：從「鼎兆元打卡」選單進來，用打卡系統已綁定的 LINE 帳號直接登入。
+    // 刻意不看也不動 PIN 與連錯次數：沒設密碼、或密碼被鎖住的人也能用 LINE 登入——鎖定是保護「4 位數密碼被猜」，
+    // LINE ID token 是另一個獨立的身分證明（由 LINE 簽發、後端向 LINE 驗證），猜密碼的人拿不到。
+    // 回傳與 login 相同；同一個 LINE 對到多人（例如同一人在兩店各有一筆）時回 choices，讓本人選，再帶 staffId 重送。
+    lineLogin: function (q) {
+      if (!lineVerify) throw err('LINE_OFF', 'LINE 登入目前無法使用，請選你的名字登入');
+      var tok = String(q.idToken || '');
+      if (!tok || tok.length > 4096) throw err('BAD_REQ', '缺少 LINE 登入資料');
+      var sub = lineVerify.verify(tok);
+      if (!sub) throw err('LINE_BAD', 'LINE 登入驗證失敗，請選你的名字登入');
+      var h = auth.lineHash(sub);
+      var hits = store.getStaff().filter(function (s) { return s.active && s.lineHash && s.lineHash === h; });
+      if (q.staffId) hits = hits.filter(function (s) { return s.id === String(q.staffId); });
+      if (!hits.length) throw err('LINE_NOT_LINKED', '這個 LINE 還沒對到佈告欄名單，請選你的名字登入');
+      if (hits.length > 1) return { choices: hits.map(function (s) { return { id: s.id, name: L.maskName(s.name), unit: s.unit }; }) };
+      var s = hits[0];
       return { token: auth.makeStaffToken(store.secret(), s.id, s.pinVer), me: me(s), board: boardFor(s) };
     },
     board: function (q) { return boardFor(staffOf(q)); },
@@ -247,7 +277,7 @@ function makeService_(L, store, files, auth, clock, clockSrc) {
       if (!stores.length) st = '';
       var all = store.getStaff();
       if (all.some(function (s) { return s.active && s.name === name && s.unit === q.unit; })) throw err('BAD_REQ', '此單位已有同名同仁');
-      var s = { id: nextId('S-', all, 3), name: name, unit: q.unit, pinHash: '', salt: '', pinVer: 0, fail: 0, active: true, createdAt: iso(), deletedAt: '', src: '', store: st };
+      var s = { id: nextId('S-', all, 3), name: name, unit: q.unit, pinHash: '', salt: '', pinVer: 0, fail: 0, active: true, createdAt: iso(), deletedAt: '', src: '', store: st, lineHash: '' };
       store.saveStaff(s); log('新增同仁', s.id, name + '（' + L.STAFF_UNIT_NAME[s.unit] + (st ? st : '') + '）');
       return { staff: { id: s.id, name: s.name, unit: s.unit, store: st, hasPin: false, locked: false } };
     },
@@ -275,9 +305,10 @@ function makeService_(L, store, files, auth, clock, clockSrc) {
         if (same) { same.src = key; if (r.store && !same.store) same.store = r.store; store.saveStaff(same); adopted++; return; }   // 手動建過的同一人：補上來源
         var gone = all.filter(function (s) { return !s.active && !s.src && s.name === name && s.unit === r.unit; })[0];
         if (gone) { gone.src = key; store.saveStaff(gone); return; }            // 佈告欄已手動刪除的同一人：視為刻意刪除，不加回
-        var s = { id: nextId('S-', all, 3), name: name, unit: r.unit, pinHash: '', salt: '', pinVer: 0, fail: 0, active: true, createdAt: iso(), deletedAt: '', src: key, store: r.store || '' };
+        var s = { id: nextId('S-', all, 3), name: name, unit: r.unit, pinHash: '', salt: '', pinVer: 0, fail: 0, active: true, createdAt: iso(), deletedAt: '', src: key, store: r.store || '', lineHash: '' };
         store.saveStaff(s); all.push(s); added.push(name + '（' + L.STAFF_UNIT_NAME[r.unit] + '）');
       });
+      applyLineHash(got);                                                   // LINE 綁定：在職→打卡名單的 lineHash，離職／沒綁→清空（只在值有變時寫入）
       var left = all.filter(function (s) { return s.active && s.src && !liveKeys[s.src] && got.sources.indexOf(s.src.split(':')[0]) >= 0; })
         .map(function (s) { return { id: s.id, name: s.name, unit: s.unit }; });
       if (added.length || adopted) log('打卡同步', '', '新增 ' + added.length + ' 人、對應 ' + adopted + ' 人');
@@ -318,7 +349,7 @@ function makeService_(L, store, files, auth, clock, clockSrc) {
       return { ok: false, code: 'SERVER', message: '系統忙碌，請稍後再試' };
     }
   }
-  return { call: call, WRITE_ACTIONS: ['setPin', 'login', 'ack', 'adminLogin', 'savePost', 'setPublished', 'setPinned', 'staffAdd', 'staffDelete', 'staffResetPin', 'syncClock', 'staffSetStore'] };   // uploadFile 不碰試算表，不上鎖
+  return { call: call, WRITE_ACTIONS: ['setPin', 'login', 'ack', 'adminLogin', 'savePost', 'setPublished', 'setPinned', 'staffAdd', 'staffDelete', 'staffResetPin', 'syncClock', 'staffSetStore', 'lineLogin'] };   // uploadFile 不碰試算表，不上鎖
 }
 
 if (typeof module !== 'undefined') module.exports = { makeService_: makeService_ };

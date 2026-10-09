@@ -1,8 +1,8 @@
 /* 鼎兆元｜電子佈告欄 — 背景工作共用（server/mirror.js 每小時、server/daily.js 每日、server/restore.js 還原）
  * 背景工作與伺服器是兩個程序同時開同一個 bulletin.db，所以這裡**不經 makeSqliteStore**（#8 審查發現）：
  *   makeSqliteStore 會跑 CREATE TABLE／ALTER TABLE／PRAGMA journal_mode，而且 kv.secret 缺的時候會寫入一把新 secret——
- *   在正式庫上、伺服器開著時，這是危險的副作用。背景工作自己開一般連線＋busy_timeout，只做 SELECT、VACUUM INTO
- *   與 `UPDATE reads SET driveSigId`（只寫那一欄）。 */
+ *   在正式庫上、伺服器開著時，這是危險的副作用。背景工作自己開一般連線＋busy_timeout，只做 SELECT、VACUUM INTO、
+ *   `UPDATE reads SET driveSigId`（只寫那一欄），以及 mirror.js 第 4 步在交易內只改同仁 JSON 的 lineHash（2026-10-09）。 */
 'use strict';
 const fs = require('fs');
 const path = require('path');

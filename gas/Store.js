@@ -5,8 +5,9 @@
 var SHEETS_ = {
   posts: { name: '公告', cols: ['id', 'title', 'body', 'units', 'publishOn', 'expiresOn', 'pinned', 'published', 'offOn', 'files', 'createdAt', 'updatedAt'],
     head: ['id', '標題', '內容', '單位', '上架日', '到期日', '置頂', '上架中', '手動下架日', '附件', '建立時間', '最後修改時間'] },
-  staff: { name: '同仁', cols: ['id', 'name', 'unit', 'pinHash', 'salt', 'pinVer', 'fail', 'active', 'createdAt', 'deletedAt', 'src', 'store'],
-    head: ['id', '姓名', '單位', '密碼雜湊', 'salt', '密碼版本', '連續錯誤次數', '在職', '建立時間', '刪除時間', '來源（打卡系統）', '門市'] },
+  // lineHash（2026-10-09，LINE 自動登入）：欄位只能加在最後、不可重排；沒有這一欄的舊表讀到空字串（write 會自動補表頭）
+  staff: { name: '同仁', cols: ['id', 'name', 'unit', 'pinHash', 'salt', 'pinVer', 'fail', 'active', 'createdAt', 'deletedAt', 'src', 'store', 'lineHash'],
+    head: ['id', '姓名', '單位', '密碼雜湊', 'salt', '密碼版本', '連續錯誤次數', '在職', '建立時間', '刪除時間', '來源（打卡系統）', '門市', 'LINE 綁定（雜湊）'] },
   // 名單快照欄位定義（寫在獨立的公開名單試算表，見 snapBook_；setup 不在主試算表建這個分頁）
   snap: { name: '名單快照', cols: ['id', 'name', 'unit', 'store', 'hasPin', 'locked'], head: ['id', 'name', 'unit', 'store', 'hasPin', 'locked'] },
   reads: { name: '已讀', cols: ['postId', 'staffId', 'name', 'unit', 'at', 'sigId'],
@@ -89,7 +90,8 @@ function mirrorRows_(d, fromPost, oldSig) {
   oldSig = oldSig || {};
   return {
     posts: d.posts.map(fromPost),
-    staff: d.staff.map(function (s) { var o = Object.assign({}, s); o.active = s.active ? 'TRUE' : 'FALSE'; return o; }),
+    // lineHash 不鏡像（Mac mini 是正本時試算表那一欄永遠空白；回退到 GAS 後下一次「打卡同步」會重新填）
+    staff: d.staff.map(function (s) { var o = Object.assign({}, s); o.active = s.active ? 'TRUE' : 'FALSE'; o.lineHash = ''; return o; }),
     reads: d.reads.map(function (r) { return { postId: r.postId, staffId: r.staffId, name: r.name, unit: r.unit, at: r.at, sigId: r.driveSigId || oldSig[r.postId + '|' + r.staffId] || '' }; }),
     log: d.log.map(function (e) { return { at: e.at, action: e.action, target: e.target || '', summary: e.summary || '' }; })
   };
@@ -135,7 +137,8 @@ function makeStore_(files) {
     var ck = 'rows:' + key + ':' + gen, hit = fresh ? null : cacheGet_(ck);
     if (hit) { memo[key] = hit; return hit; }
     var sh = sheet(key), n = sh.getLastRow() - 1, cols = SHEETS_[key].cols;
-    var vals = n > 0 ? sh.getRange(2, 1, n, cols.length).getValues() : [];
+    var nc = Math.min(cols.length, sh.getMaxColumns());                // 舊分頁欄數比定義少（例如沒有 lineHash 欄）：只讀現有的，缺的當空白
+    var vals = n > 0 ? sh.getRange(2, 1, n, nc).getValues() : [];
     memo[key] = vals.map(function (r, i) {
       var o = { _row: i + 2 }; cols.forEach(function (c, j) { o[c] = cellStr_(r[j]); }); return o;
     });
@@ -144,6 +147,7 @@ function makeStore_(files) {
   }
   function write(key, obj, row) {
     var cols = SHEETS_[key].cols, sh = sheet(key);
+    if (sh.getMaxColumns() < cols.length) sh.insertColumnsAfter(sh.getMaxColumns(), cols.length - sh.getMaxColumns());   // 分頁欄數不夠先加欄（getRange 越界會丟例外）
     if (sh.getRange(1, cols.length).getValue() === '') {                 // 舊表補新欄表頭（例如同仁的「來源」欄）
       sh.getRange(1, 1, 1, cols.length).setValues([SHEETS_[key].head]).setFontWeight('bold');
       sh.getRange(1, cols.length, sh.getMaxRows(), 1).setNumberFormat('@');
@@ -188,7 +192,8 @@ function makeStore_(files) {
   }
   function toStaff(r) {
     return { id: r.id, name: r.name, unit: r.unit, pinHash: r.pinHash, salt: r.salt, pinVer: Number(r.pinVer) || 0,
-      fail: Number(r.fail) || 0, active: bool_(r.active), createdAt: r.createdAt, deletedAt: r.deletedAt, src: r.src || '', store: r.store || '' };
+      fail: Number(r.fail) || 0, active: bool_(r.active), createdAt: r.createdAt, deletedAt: r.deletedAt, src: r.src || '', store: r.store || '',
+      lineHash: r.lineHash || '' };
   }
 
   return {

@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex,nofollow">
+<title>鼎兆元｜電子佈告欄</title>
+<meta name="theme-color" content="#1F4E8C">
+<link rel="icon" href="assets/logo-mzt.png">
+<link rel="stylesheet" href="css/app.css?v=0.7.0">
+</head>
+<body>
+<header class="top">
+  <div class="in">
+    <div class="logos"><img class="mzt" src="assets/logo-mzt.png" alt="墨竹亭"><img class="mala" src="assets/logo-mala.jpg" alt="麻的小辛辣"></div>
+    <h1>鼎兆元<small>｜</small>電子佈告欄</h1>
+  </div>
+</header>
+<main class="wrap"><div id="app"></div></main>
+<div class="mask" id="mask"><div class="sheet" id="sheet"></div></div>
+<div class="viewer" id="viewer"><div class="vbar"><b id="vname"></b><button id="vclose" hidden>關閉</button></div><div class="vbody" id="vbody"></div></div>
+<div class="toast" id="toast"></div>
+
+<script src="js/config.js?v=0.7.0"></script>
+<script src="js/logic.js?v=0.7.0"></script>
+<script src="js/ui.js?v=0.7.0"></script>
+<script src="js/api.js?v=0.7.0"></script>
+<script src="js/staff.js?v=0.7.0"></script>
+<script src="js/line.js?v=0.7.0"></script>
+<script>
+  // 本機模式（?mode=local&test_uid=…）才載入假後端（與首頁同一份 localStorage 假資料）
+  if (CFG.MODE === 'local') {
+    ['js/sha256.js', 'gas/Auth.js', 'gas/Service.js', 'js/demo-data.js', 'js/mock.js'].reduce(function (p, src) {
+      return p.then(function () { return new Promise(function (ok, no) { var s = document.createElement('script'); s.src = src + '?v=' + CFG.VERSION; s.onload = ok; s.onerror = no; document.head.appendChild(s); }); });
+    }, Promise.resolve()).then(Line.start, function () { UI.fatal('本機假後端載入失敗'); });
+  } else {
+    Line.start();
+  }
+</script>
+</body>
+</html>

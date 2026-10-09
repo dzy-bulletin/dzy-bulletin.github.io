@@ -14,6 +14,7 @@ function makeSheet(maxRows) {
   const cell = (r, c) => ((sh.data[r - 1] || [])[c - 1] ?? '');
   sh.getLastRow = () => sh.data.length;
   sh.getMaxRows = () => sh.max;
+  sh.maxCols = 26; sh.getMaxColumns = () => sh.maxCols; sh.insertColumnsAfter = (a, n) => { sh.maxCols += n; };   // #32-7：欄數防呆
   sh.insertRowsAfter = (after, n) => { sh.max += n; };
   sh.getRange = (r, c, nr = 1, nc = 1) => {
     if (r + nr - 1 > sh.max) throw new Error('範圍超出工作表');

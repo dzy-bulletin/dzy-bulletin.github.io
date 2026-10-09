@@ -2,11 +2,12 @@
 'use strict';
 var CFG = (function () {
   var c = {
-    VERSION: '0.6.3',
+    VERSION: '0.7.0',
     ROSTER_CSV: '',   // 「鼎兆元｜電子佈告欄｜公開名單」試算表（獨立檔案，只有遮罩姓名）發布到網路的 CSV 網址（不經 Apps Script，秒開）；空白＝只用後端
     GAS_URL: 'https://dingzhaoyuandemac-mini.tailc27c34.ts.net',
     MODE: 'cloud',
-    TIMEOUT: { _default: 30000, uploadFile: 240000, adminData: 40000, savePost: 120000, syncClock: 150000, receipts: 90000, login: 90000, setPin: 90000, ack: 90000 }
+    LIFF_ID: '',      // LINE「鼎兆元打卡」選單的「佈告欄」按鈕開的 LIFF（line.html）；空白＝line.html 直接轉到首頁（選名字＋密碼）
+    TIMEOUT: { _default: 30000, uploadFile: 240000, adminData: 40000, savePost: 120000, syncClock: 150000, lineLogin: 30000, receipts: 90000, login: 90000, setPin: 90000, ack: 90000 }
   };
   try {
     var m = new URLSearchParams(location.search).get('mode');

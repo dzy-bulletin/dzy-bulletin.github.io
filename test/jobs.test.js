@@ -132,7 +132,7 @@ async function main() {
     const r = await quiet(() => runMirror({ dir, bridge: B, batch: 10, maxPerRun: 20 }));
     eq('回填：每輪上限 20 張、每批 ≤10 張（2 次 sigs 呼叫）', [r.uploaded, B.sizes], [20, [10, 10]]);
     eq('回填：pending＝剩下還沒回填的（25－20）', r.pending, 5);
-    eq('鏡像：先回填再鏡像，mirror 1 次、ok、fails 0', [B.calls, r.ok, r.fails], [['sigs', 'sigs', 'mirror'], true, 0]);
+    eq('鏡像：先回填再鏡像，mirror 1 次（之後第 4 步讀打卡名單）、ok、fails 0', [B.calls, r.ok, r.fails], [['sigs', 'sigs', 'mirror', 'clock'], true, 0]);
     const mr = B.mirrored.reads;
     eq('鏡像內容：四份都有、筆數與庫一致', [Object.keys(B.mirrored), B.mirrored.posts.length, B.mirrored.staff.length, mr.length, B.mirrored.log.length], [['posts', 'staff', 'reads', 'log'], 2, 30, 27, 1]);
     eq('鏡像保留 driveSigId：搬遷來的原 Drive id 不變', mr.find((x) => x.staffId === 'S-029').driveSigId, 'DRV-OLD');
@@ -147,7 +147,7 @@ async function main() {
     eq('下一輪：補完剩下 5 張、pending 0', [r2.uploaded, r2.pending, B2.sizes], [5, 0, [5]]);
     const B3 = fakeBridge();
     const r3 = await quiet(() => runMirror({ dir, bridge: B3 }));
-    eq('沒有待回填時不打 sigs，只鏡像', [B3.calls, r3.uploaded, r3.pending], [['mirror'], 0, 0]);
+    eq('沒有待回填時不打 sigs，只鏡像（＋第 4 步讀打卡名單）', [B3.calls, r3.uploaded, r3.pending], [['mirror', 'clock'], 0, 0]);
     // 批次上限夾在 20（Apps Script SIGS_MAX_）；--all 不設每輪上限
     const dir2 = tmp(); seedDb(dir2, 25);
     const B4 = fakeBridge();
@@ -614,7 +614,7 @@ async function main() {
       eq('M7 分段：20MB 附件 fileget 3 次、每段 8＋8＋4MB', [B.n('fileget'), B.segs], [3, [8 * MB, 8 * MB, 4 * MB]]);
       eq('M7 分段：合併後位元組與 md5 相符、rename 成功、沒有 .tmp、meta 補上 md5／sha256／savedAt／size', [localBuf(dir, 'F-20MB').equals(buf), m.md5, m.sha256, !!Date.parse(m.savedAt), m.size, m.name, tmpLeft(dir)],
         [true, md5(buf), sha(buf), true, 20 * MB, '大檔.pdf', []]);
-      eq('M7 分段：files 結果 fetched 1、pending 0、count 1、bytes 20MB；鏡像照常 ok', [r.files.fetched, r.files.pending, r.files.count, r.files.bytes, r.files.failed, r.ok, B.calls], [1, 0, 1, 20 * MB, 0, true, ['sigs', 'mirror']]);
+      eq('M7 分段：files 結果 fetched 1、pending 0、count 1、bytes 20MB；鏡像照常 ok', [r.files.fetched, r.files.pending, r.files.count, r.files.bytes, r.files.failed, r.ok, B.calls], [1, 0, 1, 20 * MB, 0, true, ['sigs', 'mirror', 'clock']]);
       eq('M7：mirror-last.json 帶 files', last(dir, 'mirror-last.json').files.count, 1); }
 
     // 背景補齊：刪位元組（meta 留著）→ 下一輪補回；刪位元組與 meta、但公告仍引用 → 下一輪先補 meta 再補位元組

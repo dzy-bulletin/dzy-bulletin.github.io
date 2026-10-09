@@ -100,6 +100,32 @@ var DZYB = (function () {
   }
 
   // C9：回傳 null（可用）、'BAD_REQ'（格式錯）、'WEAK_PIN'（太好猜）
+  // LINE 自動登入（2026-10-09）：同仁表只存 lineHash＝SHA-256('dzyb-line:' + LINE userId) 的小寫 hex，原始 userId 不離開 Apps Script
+  var LINE_HASH_PREFIX = 'dzyb-line:';
+  // 打卡名單 → 同仁 lineHash 應有的值（syncClock 與 Mac mini 每小時工作共用這一段）。
+  // 只看 src 有值、而且這次有讀到該來源（got.sources）的同仁：名單裡在職 → 該列的 lineHash；離職、沒綁 LINE、名單裡找不到 → ''。
+  // 讀取失敗的來源一律不動。回傳有變動的 [{id, lineHash, bump}]；只動 lineHash（與 bump 時的 pinVer），不新增、不刪除同仁。
+  // bump＝原本有綁定、現在清空或換成別的 LINE（#32-2）：呼叫端要把 pinVer +1，讓用舊 LINE 登入的手機憑證失效（密碼本身不變）。
+  // 從沒綁 → 綁上（'' → 值）不 bump。
+  function lineHashUpdates(staff, got) {
+    var rows = (got && got.rows) || [], srcs = (got && got.sources) || [], want = {};
+    rows.forEach(function (r) {
+      if (!r || !r.empId) return;
+      var k = r.src + ':' + r.empId, h = String(r.lineHash || '');
+      h = r.active && /^[0-9a-f]{64}$/.test(h) ? h : '';
+      if (!(k in want) || h) want[k] = h;                              // 同一工號重複出現：在職且有綁定的那列優先
+    });
+    var out = [];
+    (staff || []).forEach(function (s) {
+      if (!s || !s.src) return;
+      if (srcs.indexOf(String(s.src).split(':')[0]) < 0) return;
+      var h = want[s.src] || '';
+      var old = s.lineHash || '';
+      if (old !== h) out.push({ id: s.id, lineHash: h, bump: !!old });
+    });
+    return out;
+  }
+
   function pinProblem(pin) {
     if (typeof pin !== 'string' || !/^\d{4}$/.test(pin)) return 'BAD_REQ';
     if (/^(\d)\1{3}$/.test(pin)) return 'WEAK_PIN';
@@ -170,7 +196,7 @@ var DZYB = (function () {
     STAFF_MAX_FAIL: STAFF_MAX_FAIL, ADMIN_MAX_FAIL: ADMIN_MAX_FAIL, ADMIN_LOCK_MS: ADMIN_LOCK_MS,
     today: today, isDate: isDate, addDays: addDays, normUnits: normUnits, isAllUnits: isAllUnits,
     status: status, sortBoard: sortBoard, sortHistory: sortHistory,
-    maskName: maskName, pinProblem: pinProblem,
+    maskName: maskName, pinProblem: pinProblem, LINE_HASH_PREFIX: LINE_HASH_PREFIX, lineHashUpdates: lineHashUpdates,
     fileExt: fileExt, fileType: fileType, fileMime: fileMime, checkFiles: checkFiles, postProblem: postProblem,
     fmtMD: fmtMD, fmtYM: fmtYM, fmtSize: fmtSize, unsignedText: unsignedText
   };

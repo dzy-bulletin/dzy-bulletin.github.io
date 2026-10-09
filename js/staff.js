@@ -19,7 +19,9 @@ var Staff = (function () {
       $('testMe').onclick = function () { DZYB_MOCK.testerReset(); clearMe(); v.board = v.hist = null; UI.toast('測試員的密碼與簽名已清除'); picker(true, 'mala'); };
     }
     $('openAdmin').onclick = function () { Admin.open(); };
-    if (loggedIn()) loadBoard(); else picker(true);
+    // LINE 自動登入（line.html）失敗時留下的一次性提示：顯示一次就刪
+    var flash = UI.store.get('flash'); if (flash) UI.store.del('flash');
+    if (loggedIn()) { loadBoard(); if (flash) UI.toast(flash); } else picker(true, undefined, flash);
   }
   function clearMe() { UI.store.del('token'); UI.store.del('me'); UI.store.del('board'); renderMe(); $('app').innerHTML = ''; }   // 名單快取（roster）保留：換人時秒開
   function logout(msg) {
@@ -76,7 +78,7 @@ var Staff = (function () {
       .then(function (r) { return r.ok ? r.text() : null; }).then(function (x) { clearTimeout(t); return parseCsv(x); }, function () { clearTimeout(t); return null; });
   }
 
-  function picker(force, unit) {
+  function picker(force, unit, notice) {
     var lock = force === true, people = null, shown = false, done = false;
     var GROUPS = L.UNITS.concat([{ id: 'hq', name: '總部' }]);
     var grp = function (u) { return u.indexOf('hq-') === 0 ? 'hq' : u; };
@@ -101,6 +103,7 @@ var Staff = (function () {
           '<div class="picklist">' + (list.map(function (p) { return '<button data-pick="' + esc(p.id) + '">' + esc(p.name) + (p.locked ? ' 🔒' : '') + (cur === 'hq' ? '<br><small style="color:var(--sub);font-weight:400">' + L.STAFF_UNIT_NAME[p.unit].replace('總部', '') + '</small>' : '') + '</button>'; }).join('') || '<div class="hint" style="grid-column:1/-1">這個單位還沒有同仁名單</div>') + '</div>';
       }
       var s = UI.sheet(head + '<div class="body">' +
+        (notice ? '<div class="err" id="pkNotice" style="margin:0 0 8px">' + esc(notice) + '</div>' : '') +
         '<div class="hint" style="margin:0 0 10px">選自己的名字並輸入 4 位數密碼（第一次使用會請你設定）。這支手機會記住你，按「我已閱讀」時會請你手寫簽名。</div>' +
         '<div class="seg">' + GROUPS.map(function (u) { return '<button data-pu="' + u.id + '" class="' + (u.id === cur ? 'on' : '') + '">' + u.name + '</button>'; }).join('') + '</div>' +
         body + '<div class="hint" style="margin-top:14px">找不到自己的名字？請洽主管在「設定 → 同仁名單」新增。</div>' +
@@ -199,8 +202,13 @@ var Staff = (function () {
     }
   }
 
+  // 登入成功後存進這支手機（密碼登入與 line.html 的 LINE 登入共用；LINE 登入不動名單快取的 hasPin／locked）
+  function saveLogin(d) {
+    UI.store.set('token', d.token); UI.store.set('me', JSON.stringify(d.me));
+    if (d.board) UI.store.set('board', JSON.stringify({ id: d.me.id, b: d.board }));
+  }
   function enter(d) {
-    UI.store.set('token', d.token); UI.store.set('me', JSON.stringify(d.me)); patchRoster(d.me.id, { hasPin: true, locked: false });
+    saveLogin(d); patchRoster(d.me.id, { hasPin: true, locked: false });
     v.unit = L.homeTab(d.me.unit); v.tab = 'board'; v.board = v.hist = null;
     UI.closeSheet(); UI.toast('你好，' + d.me.name);
     if (d.board) { v.board = d.board; cacheBoard(d.board); renderMe(); render(); }   // 登入回應已含公告，不用再等一次
@@ -315,5 +323,5 @@ var Staff = (function () {
     };
   }
 
-  return { start: start, logout: logout, onSheetClosed: onSheetClosed, loadBoard: loadBoard, picker: picker, me: me };
+  return { start: start, logout: logout, onSheetClosed: onSheetClosed, loadBoard: loadBoard, picker: picker, me: me, saveLogin: saveLogin };
 })();

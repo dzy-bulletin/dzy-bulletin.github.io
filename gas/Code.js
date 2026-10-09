@@ -2,8 +2,8 @@
  * 正本在 repo ~/dzy-bulletin/gas/；Logic.js 由 tools/build.sh 從 js/logic.js 產生，不要手改。 */
 'use strict';
 
-var WRITE_ACTIONS_ = ['setPin', 'login', 'ack', 'adminLogin', 'savePost', 'setPublished', 'setPinned', 'staffAdd', 'staffDelete', 'staffResetPin', 'syncClock', 'staffSetStore'];   // 必須與 Service.WRITE_ACTIONS 一致（test 檢查）
-var VERSION_ = '0.6.3';
+var WRITE_ACTIONS_ = ['setPin', 'login', 'ack', 'adminLogin', 'savePost', 'setPublished', 'setPinned', 'staffAdd', 'staffDelete', 'staffResetPin', 'syncClock', 'staffSetStore', 'lineLogin'];   // 必須與 Service.WRITE_ACTIONS 一致（test 檢查）
+var VERSION_ = '0.7.0';
 // 後端搬 Mac mini（#5、#7）：指令碼屬性 PRIMARY＝gas（現況）／mini（已切到 Mac mini）。
 // mini 時寫入一律回 MOVED、讀取照常：還沒重新整理的舊頁面能看、不能寫（避免切換期雙寫）。uploadFile 也擋（與 Mac mini 的 READONLY 同步，免得留孤兒附件）。
 // 只有寫入動作才讀 PRIMARY（讀取動作零成本、PRIMARY 沒設時與改版前完全一樣）；寫入在拿到鎖之後再確認一次（等鎖期間才切 mini 也擋得住）。
@@ -29,7 +29,7 @@ function doPost(e) {
     var build = function () {
       var files = makeFiles_();
       return makeService_(DZYB, makeStore_(files), files, makeAuth_(gasCrypto_(), DZYB),
-        { nowMs: function () { return Date.now(); }, today: function () { return DZYB.today(); } }, clockSource_());
+        { nowMs: function () { return Date.now(); }, today: function () { return DZYB.today(); } }, clockSource_(), lineVerify_());
     };
     if (action === 'roster') {                                    // 名單結果快取：命中時連 store／service 都不建（世代換了自動失效）
       var ck = 'roster:' + (PropertiesService.getScriptProperties().getProperty('DATA_GEN') || '0'), hit = null;
@@ -52,7 +52,9 @@ function doPost(e) {
   }
 }
 
-/* 打卡系統名單（唯讀）：roster 分頁的 emp_id／name／active／removed_at。來源清單在 Config.local.js（不進 git） */
+/* 打卡系統名單（唯讀）：roster 分頁的 emp_id／name／active／removed_at／line_user_id。來源清單在 Config.local.js（不進 git）
+ * line_user_id（打卡系統綁定的 LINE userId）只在這裡轉成 lineHash＝SHA-256('dzyb-line:' + userId) 的小寫 hex：
+ * 原始 userId 絕不離開 Apps Script（橋接 clock 回給 Mac mini 的也只有雜湊）。沒有這一欄（舊表）或空白 → ''。 */
 function clockSource_() {
   if (typeof CLOCK_SOURCES_ === 'undefined') return null;
   return {
@@ -61,14 +63,16 @@ function clockSource_() {
       CLOCK_SOURCES_.forEach(function (c) {
         try {
           var v = SpreadsheetApp.openById(c.ssId).getSheetByName('roster').getDataRange().getValues();
-          var h = v[0].map(String), iE = h.indexOf('emp_id'), iN = h.indexOf('name'), iA = h.indexOf('active'), iR = h.indexOf('removed_at');
+          var h = v[0].map(String), iE = h.indexOf('emp_id'), iN = h.indexOf('name'), iA = h.indexOf('active'), iR = h.indexOf('removed_at'), iL = h.indexOf('line_user_id');
           if (iE < 0 || iN < 0 || iA < 0) throw new Error('roster 欄位不符');
           var n = 0;
           v.slice(1).forEach(function (r) {
             var active = (r[iA] === true || String(r[iA]).toUpperCase() === 'TRUE') && !(iR >= 0 && String(r[iR]).trim());
             if (!String(r[iE]).trim()) return;
             if (active) n++;
-            rows.push({ src: c.src, unit: c.unit, store: c.store || '', empId: String(r[iE]).trim(), name: String(r[iN]).trim(), active: active });
+            var uid = iL >= 0 ? String(r[iL] == null ? '' : r[iL]).trim() : '';
+            rows.push({ src: c.src, unit: c.unit, store: c.store || '', empId: String(r[iE]).trim(), name: String(r[iN]).trim(), active: active,
+              lineHash: uid ? lineHashOf_(uid) : '' });
           });
           counts[c.label] = n; sources.push(c.src);
         } catch (e) { errors.push(c.label + '：讀取失敗，請確認打卡試算表還在、名單分頁叫 roster'); console.error(c.label + ': ' + e); }
@@ -76,6 +80,31 @@ function clockSource_() {
       return { rows: rows, errors: errors, counts: counts, sources: sources };
     }
   };
+}
+
+function lineHashOf_(uid) { return gasCrypto_().sha256Hex(DZYB.LINE_HASH_PREFIX + uid); }
+
+/* LINE ID token 驗證（lineLogin 用；正式後端在 Mac mini 時由 server/index.js 自己驗，這段是回退到 GAS 期間用）。
+ * POST https://api.line.me/oauth2/v2.1/verify（id_token＋client_id）→ 要求 aud＝頻道 ID、exp 未過期 → 回 sub。
+ * 頻道 ID：指令碼屬性 LINE_CHANNEL_ID，預設 2011292256（鼎兆元打卡的 LINE Login 頻道）。
+ * ⚠ UrlFetchApp 需要 script.external_request 權限；appsscript.json 目前刻意沒加（加了要 Eason 重新授權，沒授權前整個 Web App 與橋接都會失敗）。
+ *   沒權限時這裡丟錯 → Service 回 SERVER → 前端退回選名字＋密碼，不影響其他功能。要在 GAS 啟用 LINE 登入見 server/DEPLOY.md 附錄 B。 */
+function lineVerify_() {
+  return {
+    verify: function (idToken) {
+      var ch = PropertiesService.getScriptProperties().getProperty('LINE_CHANNEL_ID') || '2011292256';
+      var res = UrlFetchApp.fetch('https://api.line.me/oauth2/v2.1/verify', {
+        method: 'post', payload: { id_token: idToken, client_id: ch }, muteHttpExceptions: true, followRedirects: false });
+      if (res.getResponseCode() !== 200) return null;                  // 憑證無效、過期、頻道不符：LINE 回 400
+      var j; try { j = JSON.parse(res.getContentText()); } catch (e) { return null; }
+      return lineClaimsSub_(j, ch, Date.now());
+    }
+  };
+}
+// verify 回應 → sub（純函式，node 測試直接驗）：aud 必須是本頻道、exp 未過、sub 是字串
+function lineClaimsSub_(j, channel, nowMs) {
+  if (!j || String(j.aud) !== String(channel) || !(Number(j.exp) * 1000 > nowMs)) return null;
+  return typeof j.sub === 'string' && j.sub ? j.sub : null;
 }
 
 /* ===== Google 橋接：只有持有 BRIDGE_KEY 的 Mac mini 伺服器能呼叫（2026-09-30 後端搬 Mac mini，#7） =====

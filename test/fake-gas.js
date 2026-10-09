@@ -15,10 +15,11 @@ function makeFakeGas() {
     sh.getName = () => sh.name; sh.setName = (n) => { sh.name = n; return sh; };
     sh.getLastRow = () => sh.data.length;
     sh.getMaxRows = () => sh.max;
+    sh.maxCols = 26; sh.getMaxColumns = () => sh.maxCols; sh.insertColumnsAfter = (a, n) => { sh.maxCols += n; };   // #32-7：欄數防呆
     sh.insertRowsAfter = (after, n) => { sh.max += n; };
     sh.setFrozenRows = (n) => { sh.frozen = n; };
     sh.getRange = (r, c, nr = 1, nc = 1) => {
-      if (r + nr - 1 > sh.max) throw new Error('範圍超出工作表');
+      if (r + nr - 1 > sh.max || c + nc - 1 > sh.maxCols) throw new Error('範圍超出工作表');
       const rng = {
         getValues: () => Array.from({ length: nr }, (_, i) => Array.from({ length: nc }, (_, j) => cell(r + i, c + j))),
         getValue: () => cell(r, c),
