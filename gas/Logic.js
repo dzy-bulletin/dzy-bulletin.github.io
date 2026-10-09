@@ -108,7 +108,10 @@ var DZYB = (function () {
   // bump＝原本有綁定、現在清空或換成別的 LINE（#32-2）：呼叫端要把 pinVer +1，讓用舊 LINE 登入的手機憑證失效（密碼本身不變）。
   // 從沒綁 → 綁上（'' → 值）不 bump。
   function lineHashUpdates(staff, got) {
-    var rows = (got && got.rows) || [], srcs = (got && got.sources) || [], want = {};
+    var rows = (got && got.rows) || [], srcs = (got && got.sources) || [], want = {}, has = {};
+    // 某來源的列完全沒有 lineHash 欄位（橋接退回舊版、名冊少了 line_user_id 欄）＝不知道綁定狀態，那店整店不動，
+    // 否則會被當成全員解除綁定、全部 pinVer+1 被登出（2026-10-09 上線前補）
+    rows.forEach(function (r) { if (r && Object.prototype.hasOwnProperty.call(r, 'lineHash')) has[r.src] = 1; });
     rows.forEach(function (r) {
       if (!r || !r.empId) return;
       var k = r.src + ':' + r.empId, h = String(r.lineHash || '');
@@ -118,7 +121,8 @@ var DZYB = (function () {
     var out = [];
     (staff || []).forEach(function (s) {
       if (!s || !s.src) return;
-      if (srcs.indexOf(String(s.src).split(':')[0]) < 0) return;
+      var src0 = String(s.src).split(':')[0];
+      if (srcs.indexOf(src0) < 0 || !has[src0]) return;
       var h = want[s.src] || '';
       var old = s.lineHash || '';
       if (old !== h) out.push({ id: s.id, lineHash: h, bump: !!old });
