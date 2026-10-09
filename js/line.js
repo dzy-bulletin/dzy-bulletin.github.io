@@ -70,7 +70,7 @@ var Line = (function () {
     var q = new URLSearchParams(location.search), testUid = CFG.MODE === 'local' ? q.get('test_uid') : null;
     arm();
     if (testUid) return login('TEST:' + testUid);            // 本機假資料測試：不經 LIFF（只在 ?mode=local）
-    if (!CFG.LIFF_ID) return home();
+    if (!CFG.LIFF_ID || CFG.MODE === 'local') return home();   // 本機模式不連真的 LINE（10/9 填入正式 LIFF ID 後 e2e 會被導去 LINE 錯誤頁）
     say('正在用 LINE 帳號登入…');
     loadSdk().then(function () { return liff.init({ liffId: CFG.LIFF_ID }); }).then(function () {
       if (!liff.isLoggedIn()) return relogin(false);          // 第二次還是沒登入（瀏覽器存不了 LIFF 登入）→ 退回首頁，不無限轉址

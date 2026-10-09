@@ -292,14 +292,30 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify) {
     syncClock: function (q) {
       requireAdmin(q);
       if (!clockSrc) throw err('BAD_REQ', '未設定打卡系統來源');
-      var got = clockSrc.read(), all = store.getStaff(), added = [], adopted = 0;
+      var got = clockSrc.read(), all = store.getStaff(), added = [], adopted = 0, moved = [];
       var liveKeys = {};
       got.rows.forEach(function (r) {
         var key = r.src + ':' + r.empId, name = String(r.name || '').trim();
         if (!r.empId || !name || L.STAFF_UNIT_IDS.indexOf(r.unit) < 0) return;
         if (r.active) liveKeys[key] = 1;
         if (!r.active) return;
-        var had = all.filter(function (s) { return s.src === key; })[0];
+        // 跨店重複（L.resolveClockRows 標的）：hold＝待 Eason 判定主店、dupOf＝不是主店那列，都不新增
+        if (r.hold || r.dupOf) return;
+        var had = all.filter(function (s) { return s.src === key; })[0], changed = false;
+        // 主店已判定：佈告欄裡用別家店來源建的同一人，改掛到主店（不重複新增）
+        if (!had && r.decided && r.aka && r.aka.length) {
+          had = all.filter(function (s) { return s.active && r.aka.indexOf(s.src) >= 0; })[0];
+          if (had) { had.src = key; changed = true; }
+        }
+        if (had && r.decided && had.active) {
+          if (had.unit !== r.unit || String(had.store || '') !== String(r.store || '')) {
+            var where = function (u, st) { return (L.STAFF_UNIT_NAME[u] || u) + (st ? st : ''); };
+            moved.push(name + '（' + where(had.unit, had.store) + '→' + where(r.unit, r.store) + '）');
+            had.unit = r.unit; had.store = r.store || ''; changed = true;
+          }
+          if (changed) store.saveStaff(had);
+          return;
+        }
         if (had) { if (r.store && !had.store && had.active) { had.store = r.store; store.saveStaff(had); } return; }   // 已同步過（含被手動刪除的，不再加回）；補上門市
         var same = all.filter(function (s) { return s.active && !s.src && s.name === name && s.unit === r.unit; })[0];
         if (same) { same.src = key; if (r.store && !same.store) same.store = r.store; store.saveStaff(same); adopted++; return; }   // 手動建過的同一人：補上來源
@@ -311,8 +327,15 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify) {
       applyLineHash(got);                                                   // LINE 綁定：在職→打卡名單的 lineHash，離職／沒綁→清空（只在值有變時寫入）
       var left = all.filter(function (s) { return s.active && s.src && !liveKeys[s.src] && got.sources.indexOf(s.src.split(':')[0]) >= 0; })
         .map(function (s) { return { id: s.id, name: s.name, unit: s.unit }; });
-      if (added.length || adopted) log('打卡同步', '', '新增 ' + added.length + ' 人、對應 ' + adopted + ' 人');
-      return { added: added, adopted: adopted, left: left, counts: got.counts, errors: got.errors };
+      if (added.length || adopted || moved.length) log('打卡同步', '', '新增 ' + added.length + ' 人、對應 ' + adopted + ' 人' + (moved.length ? '、改主店 ' + moved.join('、') : ''));
+      // 同一人在佈告欄有兩筆（判定前已從兩家店各同步一次）：只列出，請主管到同仁名單刪掉多的那筆
+      var dup = [];
+      got.rows.forEach(function (r) {
+        if (!r.decided || !r.active) return;
+        var mine = all.filter(function (s) { return s.active && (s.src === r.src + ':' + r.empId || (r.aka || []).indexOf(s.src) >= 0); });
+        if (mine.length > 1) dup.push('「' + String(r.name).trim() + '」在同仁名單有 ' + mine.length + ' 筆（' + mine.map(function (s) { return s.id; }).join('、') + '），主店是 ' + L.STAFF_UNIT_NAME[r.unit] + '，請刪掉多的那筆');
+      });
+      return { added: added, adopted: adopted, left: left, counts: got.counts, errors: (got.errors || []).concat(got.messages || [], dup), moved: moved };
     },
     staffDelete: function (q) {
       requireAdmin(q);

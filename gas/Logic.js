@@ -130,6 +130,49 @@ var DZYB = (function () {
     return out;
   }
 
+  // 打卡名單跨店重複（2026-10-10 Eason：各店名單以該店打卡試算表為準；同名出現在兩家以上，由 Eason 判定主店）。
+  // primary＝{ 姓名: { src, unit?, store? } }（只放在 gas/Config.local.js，不進 git）；labels＝{ src: 店名 }。
+  // 規則：只看在職列。同名在職列分屬 ≥2 個來源 → 有判定：主店那列加 decided／aka（其他店的 src:empId），其他列標 dupOf（不新增）；
+  //       沒判定（或判定的店沒有這人）→ 全部標 hold（不新增），messages 列出請 Eason 判定。單一來源但有判定（例：改歸總部）→ 套用 unit／store。
+  // 同一人各列的 lineHash 合併成一個（主店那列優先），每一列都帶同一個值——同步 LINE 綁定時用舊店 src 的同仁才不會被誤判解綁而登出。
+  // 不刪任何列：在職判斷、「打卡已離職」清單都照舊。
+  function resolveClockRows(rows, primary, labels) {
+    primary = primary || {}; labels = labels || {};
+    var out = (rows || []).map(function (r) { return Object.assign({}, r); });
+    var byName = {}, messages = [];
+    out.forEach(function (r) {
+      if (!r || !r.active || !r.empId) return;
+      var n = String(r.name || '').trim(); if (!n) return;
+      (byName[n] = byName[n] || []).push(r);
+    });
+    var key = function (r) { return r.src + ':' + r.empId; };
+    var lab = function (r) { return (labels[r.src] || r.src) + '（' + r.empId + '）'; };
+    Object.keys(byName).forEach(function (n) {
+      var list = byName[n], p = primary[n], srcs = {};
+      list.forEach(function (r) { srcs[r.src] = 1; });
+      var multi = Object.keys(srcs).length > 1;
+      if (!multi && !p) return;
+      var main = p && p.src ? list.filter(function (r) { return r.src === p.src; })[0] : (!multi ? list[0] : null);
+      var h = '';
+      [main].concat(list).forEach(function (r) { if (!h && r && /^[0-9a-f]{64}$/.test(String(r.lineHash || ''))) h = r.lineHash; });
+      if (!main) {
+        list.forEach(function (r) { r.hold = true; });
+        messages.push(p ? '「' + n + '」的主店（' + (labels[p.src] || p.src) + '）名單裡沒有這個人或這次沒讀到，暫不同步'
+          : '「' + n + '」同時在 ' + list.map(lab).join('、') + '，請 Eason 判定以哪家店為主（判定前不同步這個人）');
+        return;
+      }
+      if (p && p.unit && STAFF_UNIT_IDS.indexOf(p.unit) >= 0) main.unit = p.unit;
+      if (p && p.store !== undefined) main.store = p.store;
+      main.decided = !!p;
+      main.aka = list.filter(function (r) { return r !== main; }).map(key);
+      list.forEach(function (r) {
+        if (Object.prototype.hasOwnProperty.call(r, 'lineHash')) r.lineHash = h;
+        if (r !== main) r.dupOf = key(main);
+      });
+    });
+    return { rows: out, messages: messages };
+  }
+
   function pinProblem(pin) {
     if (typeof pin !== 'string' || !/^\d{4}$/.test(pin)) return 'BAD_REQ';
     if (/^(\d)\1{3}$/.test(pin)) return 'WEAK_PIN';
@@ -200,7 +243,7 @@ var DZYB = (function () {
     STAFF_MAX_FAIL: STAFF_MAX_FAIL, ADMIN_MAX_FAIL: ADMIN_MAX_FAIL, ADMIN_LOCK_MS: ADMIN_LOCK_MS,
     today: today, isDate: isDate, addDays: addDays, normUnits: normUnits, isAllUnits: isAllUnits,
     status: status, sortBoard: sortBoard, sortHistory: sortHistory,
-    maskName: maskName, pinProblem: pinProblem, LINE_HASH_PREFIX: LINE_HASH_PREFIX, lineHashUpdates: lineHashUpdates,
+    maskName: maskName, pinProblem: pinProblem, LINE_HASH_PREFIX: LINE_HASH_PREFIX, lineHashUpdates: lineHashUpdates, resolveClockRows: resolveClockRows,
     fileExt: fileExt, fileType: fileType, fileMime: fileMime, checkFiles: checkFiles, postProblem: postProblem,
     fmtMD: fmtMD, fmtYM: fmtYM, fmtSize: fmtSize, unsignedText: unsignedText
   };
