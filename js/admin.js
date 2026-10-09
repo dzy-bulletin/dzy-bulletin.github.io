@@ -193,10 +193,11 @@ var Admin = (function () {
         '各來源在職人數：' + Object.keys(sy.counts || {}).map(function (k) { return esc(k) + ' ' + sy.counts[k] + ' 人'; }).join('、') + '<br>' +
         '新增 ' + sy.added.length + ' 人' + (sy.added.length ? '：' + sy.added.map(esc).join('、') : '') +
         (sy.adopted ? '<br>已對應既有名單 ' + sy.adopted + ' 人' : '') +
+        (sy.moved && sy.moved.length ? '<br>依主店判定調整：' + sy.moved.map(esc).join('、') : '') +
         (sy.left.length ? '<br>⚠️ 打卡系統已離職、但仍在佈告欄名單（請自行決定是否刪除）：' + sy.left.map(function (x) { return esc(x.name) + '（' + L.STAFF_UNIT_NAME[x.unit] + '）'; }).join('、') : '') +
         (sy.errors.length ? '<br>❌ ' + sy.errors.map(esc).join('<br>❌ ') : '') + '</div>';
     }
-    return '<div class="panel"><h4>從打卡系統同步</h4><div class="hint" style="margin:0 0 8px">讀取小辛辣光復店、央廚、墨竹亭金山店打卡系統的在職名單，自動加入缺少的同仁（只讀取，不會改動打卡系統）。其他門市與總部請手動新增。</div>' +
+    return '<div class="panel"><h4>從打卡系統同步</h4><div class="hint" style="margin:0 0 8px">讀取小辛辣光復店、央廚、墨竹亭金山店、墨竹亭光復店打卡系統的在職名單，自動加入缺少的同仁（只讀取，不會改動打卡系統）。同一人在兩家以上時，依 Eason 判定的主店只留一筆。其他門市與總部請手動新增。</div>' +
       '<button class="btn ghost" id="syncBtn">↻ 從打卡系統同步</button>' + syHTML + '</div>' +
       '<div class="panel"><h4>新增同仁</h4><div class="row"><input class="inp" id="sName" placeholder="姓名（全名）" maxlength="20">' +
       '<select class="inp" id="sUnit">' + L.STAFF_UNITS.map(function (u) { return '<option value="' + u.id + '">' + u.name + '</option>'; }).join('') + '</select>' +

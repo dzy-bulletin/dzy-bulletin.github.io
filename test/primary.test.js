@@ -150,5 +150,15 @@ const clock = { nowMs: () => Date.now(), today: () => '2026-10-10' };
     eq('改掛優先 aka 那筆', [t.by('S-2').src, t.by('S-1').src], ['mgf:G4', 'gf:X9']); }
 }
 
+// 上線當天實遇：從打卡同步來的那筆已刪、另有手動新增在總部的同名在職同仁 → 接上那筆（算對應），不出「已刪除」
+{ const st = memStore([S0('S-1', '甲', 'mzt', { src: 'js:J1', active: false, deletedAt: 'x' }), S0('S-2', '甲', 'hq-mzt')]);
+  const raw = [R('js', 'mzt', 'J1', '甲'), R('mgf', 'mzt', 'G1', '甲')];
+  const read = () => { const r = L.resolveClockRows(raw, { 甲: { src: 'mgf', unit: 'hq-mzt', store: '' } }, LAB); return { rows: r.rows, messages: r.messages, errors: [], sources: ['js', 'mgf'], counts: {} }; };
+  const sv = makeService_(L, st, { quota: () => null }, A, clock, { read }, { verify: () => null });
+  const r = sv.call('syncClock', { atoken: A.makeAdminToken('SECRET', 1, Date.now() + 60e3) });
+  const s2 = st.d.staff.find((s) => s.id === 'S-2');
+  eq('手動新增的同名在職同仁被接上主店來源、算對應、沒有已刪除提示', [s2.src, s2.unit, r.data.adopted, r.data.errors, st.d.staff.length], ['mgf:G1', 'hq-mzt', 1, [], 2]);
+}
+
 console.log(`primary.test：${pass} 通過、${fail} 失敗`);
 if (fail) process.exit(1);

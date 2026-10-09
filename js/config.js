@@ -2,7 +2,7 @@
 'use strict';
 var CFG = (function () {
   var c = {
-    VERSION: '0.7.1',
+    VERSION: '0.7.2',
     ROSTER_CSV: '',   // 「鼎兆元｜電子佈告欄｜公開名單」試算表（獨立檔案，只有遮罩姓名）發布到網路的 CSV 網址（不經 Apps Script，秒開）；空白＝只用後端
     GAS_URL: 'https://dingzhaoyuandemac-mini.tailc27c34.ts.net',
     MODE: 'cloud',

@@ -305,10 +305,12 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify) {
         if (!had && r.decided) {
           // 主店已判定：佈告欄裡同名、從打卡同步來的那位就是同一人（判定的意思就是同名＝同一人），改掛到主店，不重複新增。
           // 用名字找（不只 aka）：舊店那份這輪沒讀到、或判定前已在舊店離職，aka 都會少那一筆
-          var cands = all.filter(function (s) { return s.src && s.name === name; });
+          // 也找手動新增（沒有 src）的同名在職同仁：例如從打卡同步來的那筆被刪掉、主管改用手動加在總部（2026-10-10 上線當天實遇）
+          var cands = all.filter(function (s) { return s.name === name; });
           var act = cands.filter(function (s) { return s.active; });
-          act.sort(function (x, y) { return ((r.aka || []).indexOf(y.src) >= 0) - ((r.aka || []).indexOf(x.src) >= 0); });   // 優先掛 aka 裡那筆
-          if (act.length) { had = act[0]; had.src = key; migrated = true; }
+          var rank = function (x) { return ((r.aka || []).indexOf(x.src) >= 0 ? 2 : 0) + (x.src ? 1 : 0); };
+          act.sort(function (x, y) { return rank(y) - rank(x); });          // 優先掛 aka 裡那筆，其次打卡同步來的，最後手動新增的
+          if (act.length) { had = act[0]; if (!had.src) adopted++; had.src = key; migrated = true; }
           else if (cands.length) {                                          // 佈告欄已手動刪除這人：視為刻意刪除，不加回（#33 P10：要說出來）
             notes.push('「' + name + '」在同仁名單已刪除，不自動加回；如果是新來的同名同仁，請在同仁名單手動新增');
             return;
