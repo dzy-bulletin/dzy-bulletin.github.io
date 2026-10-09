@@ -123,7 +123,13 @@ const clock = { nowMs: () => Date.now(), today: () => '2026-10-10' };
   // P5：舊店那筆在佈告欄已手動刪除 → 不加回、也不新增
   { const t = mk([S0('S-1', '甲', 'mzt', { src: 'js:J1', active: false, deletedAt: 'x' })], [R('js', 'mzt', 'J1', '甲'), R('mgf', 'mzt', 'G4', '甲')], { 甲: { src: 'mgf' } });
     t.sv.call('syncClock', { atoken: at });
-    eq('P5：手動刪除的不加回', [t.st.d.staff.length, t.by('S-1').active], [1, false]); }
+    const r5 = t.sv.call('syncClock', { atoken: at });
+    eq('P5：手動刪除的不加回', [t.st.d.staff.length, t.by('S-1').active], [1, false]);
+    eq('P10：不加回時說出來', r5.data.errors, ['「甲」在同仁名單已刪除，不自動加回；如果是新來的同名同仁，請在同仁名單手動新增']); }
+  // P12：只判定 src、佈告欄門市空白 → 補主店門市
+  { const t = mk([S0('S-1', '甲', 'mzt', { src: 'mgf:G4', store: '' })], [R('mgf', 'mzt', 'G4', '甲'), R('js', 'mzt', 'J1', '甲')], { 甲: { src: 'mgf' } });
+    t.sv.call('syncClock', { atoken: at });
+    eq('P12：補上主店門市', t.by('S-1').store, '光復'); }
   // P6：判定表名字打錯／缺 src 有提示
   eq('P6：判定表的名字在名冊找不到、缺 src', L.resolveClockRows([R('gf', 'mala', 'E1', '甲'), R('js', 'mzt', 'J1', '甲')], { 甲: {}, 乙乙: { src: 'gf' } }, LAB).messages,
     ['「甲」的主店判定缺少 src，暫不同步', '主店判定表裡的「乙乙」在讀到的名冊裡都找不到（名字打錯、已移除，或那家店這次沒讀到）']);

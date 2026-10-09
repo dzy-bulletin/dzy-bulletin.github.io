@@ -292,7 +292,7 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify) {
     syncClock: function (q) {
       requireAdmin(q);
       if (!clockSrc) throw err('BAD_REQ', '未設定打卡系統來源');
-      var got = clockSrc.read(), all = store.getStaff(), added = [], adopted = 0, moved = [];
+      var got = clockSrc.read(), all = store.getStaff(), added = [], adopted = 0, moved = [], notes = [];
       var liveKeys = {};
       got.rows.forEach(function (r) {
         var key = r.src + ':' + r.empId, name = String(r.name || '').trim();
@@ -309,11 +309,15 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify) {
           var act = cands.filter(function (s) { return s.active; });
           act.sort(function (x, y) { return ((r.aka || []).indexOf(y.src) >= 0) - ((r.aka || []).indexOf(x.src) >= 0); });   // 優先掛 aka 裡那筆
           if (act.length) { had = act[0]; had.src = key; migrated = true; }
-          else if (cands.length) return;                                    // 佈告欄已手動刪除這人：視為刻意刪除，不加回
+          else if (cands.length) {                                          // 佈告欄已手動刪除這人：視為刻意刪除，不加回（#33 P10：要說出來）
+            notes.push('「' + name + '」在同仁名單已刪除，不自動加回；如果是新來的同名同仁，請在同仁名單手動新增');
+            return;
+          }
         }
         if (had && r.decided && had.active) {
           var where = function (u, st) { return (L.STAFF_UNIT_NAME[u] || u) + (st ? st : ''); }, was = where(had.unit, had.store);
           var unit = migrated || r.forceUnit ? r.unit : had.unit, st = migrated || r.forceStore ? (r.store || '') : String(had.store || '');
+          if (!st && r.store && !r.forceStore) st = r.store;               // #33 P12：門市空白時補上主店門市
           if (unit !== had.unit || st !== String(had.store || '')) { had.unit = unit; had.store = st; moved.push(name + '（' + was + '→' + where(unit, st) + '）'); migrated = true; }
           if (migrated) store.saveStaff(had);
           return;
@@ -337,7 +341,7 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify) {
         var mine = all.filter(function (s) { return s.active && (s.src === r.src + ':' + r.empId || (r.aka || []).indexOf(s.src) >= 0); });
         if (mine.length > 1) dup.push('「' + String(r.name).trim() + '」在同仁名單有 ' + mine.length + ' 筆（' + mine.map(function (s) { return s.id; }).join('、') + '），主店是 ' + L.STAFF_UNIT_NAME[r.unit] + '，請刪掉多的那筆');
       });
-      return { added: added, adopted: adopted, left: left, counts: got.counts, errors: (got.errors || []).concat(got.messages || [], dup), moved: moved };
+      return { added: added, adopted: adopted, left: left, counts: got.counts, errors: (got.errors || []).concat(got.messages || [], dup, notes), moved: moved };
     },
     staffDelete: function (q) {
       requireAdmin(q);
