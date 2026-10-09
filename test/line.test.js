@@ -232,35 +232,46 @@ function bridgeWith(clockData, failClock) {
   fake.close();
 
   // ---------- 7. 伺服器（E2E 假橋接）：lineLogin 端到端、限流 BUSY ----------
-  const port = await new Promise((ok) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => ok(p)); }); });
-  const sdir = tmp('dzyb-line-srv-');
-  const env = Object.assign({}, process.env, { DZYB_NO_DOTENV: '1', E2E: '1', PORT: String(port), DATA_DIR: sdir, LINE_LOGIN_PER_MIN: '3', LINE_LOGIN_GLOBAL_PER_MIN: '5', HOME: tmp('dzyb-line-home-') });
-  ['BRIDGE_URL', 'BRIDGE_KEY', 'ALLOW_ORIGIN'].forEach((k) => delete env[k]);
-  const p = spawn(process.execPath, [path.join(__dirname, '..', 'server/index.js')], { env, stdio: ['ignore', 'pipe', 'pipe'] });
-  procs.push(p);
-  let out = ''; p.stdout.on('data', (c) => { out += c; }); p.stderr.on('data', () => {});
-  await new Promise((ok, no) => { const t = setInterval(() => { if (/啟動/.test(out)) { clearInterval(t); ok(); } }, 20); p.on('exit', (c) => { clearInterval(t); no(new Error('伺服器沒起來 ' + c)); }); });
-  const post = (pth, body, ip) => new Promise((ok) => {
-    const buf = Buffer.from(JSON.stringify(body));
-    const rq = http.request({ host: '127.0.0.1', port, method: 'POST', path: pth, agent: false,
-      headers: Object.assign({ 'Content-Type': 'text/plain', 'Content-Length': buf.length }, ip ? { 'X-Forwarded-For': ip + ', 100.64.0.1' } : {}) }, (res) => {
-      const cs = []; res.on('data', (c) => cs.push(c)); res.on('end', () => ok(JSON.parse(Buffer.concat(cs).toString())));
+  async function startSrv(extra) {
+    const port = await new Promise((ok) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => ok(p)); }); });
+    const env = Object.assign({}, process.env, { DZYB_NO_DOTENV: '1', E2E: '1', PORT: String(port), DATA_DIR: tmp('dzyb-line-srv-'), HOME: tmp('dzyb-line-home-') }, extra);
+    ['BRIDGE_URL', 'BRIDGE_KEY', 'ALLOW_ORIGIN'].forEach((k) => delete env[k]);
+    const p = spawn(process.execPath, [path.join(__dirname, '..', 'server/index.js')], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+    procs.push(p);
+    let o = ''; p.stdout.on('data', (c) => { o += c; }); p.stderr.on('data', () => {});
+    await new Promise((ok, no) => { const t = setInterval(() => { if (/啟動/.test(o)) { clearInterval(t); ok(); } }, 20); p.on('exit', (c) => { clearInterval(t); no(new Error('伺服器沒起來 ' + c)); }); });
+    // xff：整個 X-Forwarded-For 標頭（不給＝不帶這個標頭）
+    const post = (pth, body, xff) => new Promise((ok) => {
+      const buf = Buffer.from(JSON.stringify(body));
+      const rq = http.request({ host: '127.0.0.1', port, method: 'POST', path: pth, agent: false,
+        headers: Object.assign({ 'Content-Type': 'text/plain', 'Content-Length': buf.length }, xff ? { 'X-Forwarded-For': xff } : {}) }, (res) => {
+        const cs = []; res.on('data', (c) => cs.push(c)); res.on('end', () => ok(JSON.parse(Buffer.concat(cs).toString())));
+      });
+      rq.end(buf);
     });
-    rq.end(buf);
-  });
-  await post('/__seed', { staff: [{ id: 'S-001', name: '測試一', unit: 'mala', pin: null, lineUid: 'U-s1' }, { id: 'S-002', name: '測試二', unit: 'cf', pin: '2580', lineUid: 'U-s2' }],
-    posts: [{ id: 'P-1', title: '公告', units: ['mala', 'mzt', 'cf'], publishOn: '2026-01-01' }], reads: [], adminPass: 'adminpass88', clock: [] });
-  const IA = '203.0.113.1', IB = '203.0.113.2';
+    await post('/__seed', { staff: [{ id: 'S-001', name: '測試一', unit: 'mala', pin: null, lineUid: 'U-s1' }, { id: 'S-002', name: '測試二', unit: 'cf', pin: '2580', lineUid: 'U-s2' }],
+      posts: [{ id: 'P-1', title: '公告', units: ['mala', 'mzt', 'cf'], publishOn: '2026-01-01' }], reads: [], adminPass: 'adminpass88', clock: [] });
+    return { post, out: () => o };
+  }
+  const SV = await startSrv({ LINE_LOGIN_PER_MIN: '3', LINE_LOGIN_GLOBAL_PER_MIN: '5' }), post = SV.post;
+  // X-Forwarded-For 取最後一段（代理加上的）：前面客戶端自己塞的那段不算（#32-8）
+  const IA = '9.9.9.9, 203.0.113.1', IB = '9.9.9.9, 203.0.113.2', IA2 = '8.8.8.8, 7.7.7.7, 203.0.113.1';
   for (let k = 0; k < 6; k++) await post('/', { action: 'lineLogin', idToken: '' }, IA);
   const s1 = await post('/', { action: 'lineLogin', idToken: 'TEST:U-s1' }, IA);
   eq('伺服器 lineLogin：空白 idToken 不算進限流（6 次 BAD_REQ 後仍能登入）；沒設密碼的同仁用 LINE 登入', [s1.ok, s1.data && s1.data.me.id], [true, 'S-001']);
   eq('伺服器 lineLogin：憑證可讀 board', (await post('/', { action: 'board', token: s1.data.token })).data.me.id, 'S-001');
   eq('伺服器 lineLogin：對不到→LINE_NOT_LINKED', (await post('/', { action: 'lineLogin', idToken: 'TEST:U-x' }, IA)).code, 'LINE_NOT_LINKED');
   eq('伺服器 lineLogin：非 TEST 憑證（E2E 不連 LINE）→LINE_BAD', (await post('/', { action: 'lineLogin', idToken: 'eyJ.x.y' }, IA)).code, 'LINE_BAD');
-  eq('伺服器 限流：同一 IP 每分鐘第 4 次→BUSY', (await post('/', { action: 'lineLogin', idToken: 'TEST:U-s2' }, IA)).code, 'BUSY');
-  eq('伺服器 限流：別的 IP 不受影響；有密碼的同仁也可以', (await post('/', { action: 'lineLogin', idToken: 'TEST:U-s2' }, IB)).data.me.id, 'S-002');
+  eq('伺服器 限流：最後一段相同（前面塞的不同）算同一 IP，第 4 次→BUSY', (await post('/', { action: 'lineLogin', idToken: 'TEST:U-s2' }, IA2)).code, 'BUSY');
+  eq('伺服器 限流：第一段相同、最後一段不同＝不同 IP，不受影響；有密碼的同仁也可以', (await post('/', { action: 'lineLogin', idToken: 'TEST:U-s2' }, IB)).data.me.id, 'S-002');
   eq('伺服器 限流：全體第 5 次仍可', (await post('/', { action: 'lineLogin', idToken: 'TEST:U-s2' }, IB)).ok, true);
-  eq('伺服器 限流：全體超過 5 次→BUSY（換 IP 也一樣）', [(await post('/', { action: 'lineLogin', idToken: 'TEST:U-s2' }, IB)).code, (await post('/', { action: 'lineLogin', idToken: 'TEST:U-s2' }, '203.0.113.9')).code], ['BUSY', 'BUSY']);
+  eq('伺服器 限流：全體超過 5 次→BUSY（換 IP、不帶標頭也一樣）', [(await post('/', { action: 'lineLogin', idToken: 'TEST:U-s2' }, IB)).code, (await post('/', { action: 'lineLogin', idToken: 'TEST:U-s2' }, '203.0.113.9')).code, (await post('/', { action: 'lineLogin', idToken: 'TEST:U-s2' })).code], ['BUSY', 'BUSY', 'BUSY']);
+  // 沒有 X-Forwarded-For：只套全體上限（不用 socket 分桶，否則經 Funnel 全部人共用每 IP 的 10 次）
+  const SV2 = await startSrv({ LINE_LOGIN_PER_MIN: '10', LINE_LOGIN_GLOBAL_PER_MIN: '15' });
+  const codes = [];
+  for (let k = 0; k < 16; k++) codes.push((await SV2.post('/', { action: 'lineLogin', idToken: 'TEST:U-s' + (1 + k % 2) })).ok ? 'ok' : 'BUSY');
+  eq('伺服器 限流：沒帶 X-Forwarded-For 時 11 次以上照常（只到全體 15 才 BUSY）', [codes.slice(0, 15).every((c) => c === 'ok'), codes[15]], [true, 'BUSY']);
+  const out = SV.out() + SV2.out();
   eq('伺服器 roster 不含 lineHash', JSON.stringify((await post('/', { action: 'roster' })).data).includes('lineHash'), false);
   eq('伺服器 紀錄不含 idToken／sub', /TEST:U-s1|U-s1/.test(out), false);
 })().catch((e) => { fail++; console.log('✗ 例外', e && e.stack || e); }).finally(() => {

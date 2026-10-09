@@ -8,7 +8,8 @@ var Line = (function () {
   var FAILED = 'LINE 登入沒有成功，請選你的名字並輸入密碼';
   var RETRY_KEY = 'dzyb_lineRetry';
 
-  var TIMEOUT_MS = 20000, gone = false, timer = null;
+  // 硬逾時要比 API 的 lineLogin 逾時（含 LINE 驗證）再多 10 秒，否則後端正常但慢時會被提早踢回首頁（#32-9）
+  var TIMEOUT_MS = ((CFG.TIMEOUT && CFG.TIMEOUT.lineLogin) || 30000) + 10000, REDIRECT_MS = 10000, gone = false, timer = null;
 
   function say(t) { $('app').innerHTML = '<div class="loading"></div>'; $('app').firstChild.textContent = t; }
   function ss(op, k, v) { try { return op === 'get' ? sessionStorage.getItem(k) : op === 'set' ? sessionStorage.setItem(k, v) : sessionStorage.removeItem(k); } catch (e) { return op === 'get' ? '1' : null; } }   // 存不了就當作「已經試過」，不重導
@@ -29,9 +30,10 @@ var Line = (function () {
     ss('set', RETRY_KEY, '1');
     try {
       if (logoutFirst) liff.logout();
-      gone = true; clearTimeout(timer);                       // 準備離開頁面：不再觸發逾時
+      // 備援計時：liff.login／reload 照理會離開這頁（計時器跟著消失）；10 秒內既沒轉走也沒丟錯就退回首頁（#32-9）
+      clearTimeout(timer); timer = setTimeout(function () { home(FAILED); }, REDIRECT_MS);
       if (liff.isInClient()) location.reload(); else liff.login({ redirectUri: location.href });
-    } catch (e) { gone = false; home(FAILED); }
+    } catch (e) { home(FAILED); }
   }
   function loadSdk() {
     return new Promise(function (ok, no) {
@@ -61,7 +63,7 @@ var Line = (function () {
     s.querySelectorAll('[data-pick]').forEach(function (b) { b.onclick = function () { $('mask').classList.remove('show'); arm(); login(idToken, b.dataset.pick, inLiff); }; });
     s.querySelector('#lcNone').onclick = function () { home(); };
   }
-  // 硬性逾時：不管卡在哪一步（SDK 載不到、LIFF 沒回應、後端沒回應），20 秒後一律退回首頁
+  // 硬性逾時：不管卡在哪一步（SDK 載不到、LIFF 沒回應、後端沒回應），TIMEOUT_MS 後一律退回首頁
   function arm() { clearTimeout(timer); timer = setTimeout(function () { home(FAILED); }, TIMEOUT_MS); }
 
   function start() {

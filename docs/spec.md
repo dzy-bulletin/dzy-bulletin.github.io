@@ -113,8 +113,8 @@ Apps Script Web App（madesiaosinla，以擁有者身分執行、任何人可呼
 - **LINE 登入不看也不動密碼與連錯次數**：沒設密碼、密碼被鎖住的人都能用 LINE 登入（鎖定保護的是 4 位數密碼被猜；LINE ID token 是另一個獨立證明）。發的憑證與密碼登入同一種，重設密碼（pinVer +1）一樣讓它失效。因此同仁憑證的驗證不再要求「已設密碼」。
 - 綁定來源：主管按「打卡同步」時更新；Mac mini 每小時鏡像工作（`server/mirror.js` 第 4 步）也會只刷新 `lineHash`（不新增、不刪除同仁）。打卡離職或解除綁定 → 清空。
 - 解綁／改綁（`lineHash` 由有值變成空白或別的值）時 `pinVer` +1，讓已發出的憑證全部失效（密碼不變）；空白 → 有值不動（審查 #32-2）。
-- 前端防呆（#32-1、#32-3）：重新登入 LINE（`liff.login`、或在 LINE app 內 `liff.logout`＋重新載入）同一分頁只試一次（sessionStorage `dzyb_lineRetry`），任何步驟失敗或 20 秒沒完成都退回首頁。
-- Mac mini 限流（#32-5）：只計真的要打 LINE verify 的請求；每個來源 IP（`X-Forwarded-For` 第一段，沒有就用連線位址）每分鐘 10 次，全體每分鐘 120 次，超過回 `BUSY`。
+- 前端防呆（#32-1、#32-3）：重新登入 LINE（`liff.login`、或在 LINE app 內 `liff.logout`＋重新載入）同一分頁只試一次（sessionStorage `dzyb_lineRetry`），任何步驟失敗、或超過「lineLogin 逾時＋10 秒」沒完成都退回首頁；轉去 LINE 登入後 10 秒內既沒離開頁面也沒丟錯，同樣退回首頁（#32-9）。
+- Mac mini 限流（#32-5、#32-8）：只計真的要打 LINE verify 的請求；全體每分鐘 120 次；有 `X-Forwarded-For` 時再以它的**最後一段**（最靠近伺服器的代理加上的）分桶，每 IP 每分鐘 10 次；沒有這個標頭只套全體上限（經 Funnel 的連線位址一律是本機，不能拿來分桶）。超過回 `BUSY`。每 IP 分桶只是防濫用的輔助，實際效果取決於 Funnel 帶的標頭格式，部署時照 DEPLOY.md 附錄 B 用 curl 驗一次。
 
 ### 密碼防猜
 - 4 位數只有 1 萬種組合，所以錯誤次數全部**由後端判斷**，前端顯示的次數只是提示。

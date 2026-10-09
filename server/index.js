@@ -171,18 +171,22 @@ function makeApp(cfg) {
   const MOVED = { ok: false, code: 'MOVED', message: '系統搬家中，請稍後重新整理' };
   const frozen = () => fs.existsSync(READONLY_FILE);
   // lineLogin 限流（每個程序記憶體、滑動 1 分鐘；#32-5）：每次驗證都要打 LINE 的 verify API，公開網址不能讓人無限轉送。
-  // 以來源 IP 分桶（每 IP LINE_PER_MIN），另有全體加總上限（LINE_GLOBAL_PER_MIN）——有人狂送時只擋他自己，
-  // 偽造 X-Forwarded-For 換 IP 也只會撞到全體上限（全體被擋時同仁退回選名字＋密碼，功能仍在）。
+  // 有 X-Forwarded-For 時以來源 IP 分桶（每 IP LINE_PER_MIN），另有全體加總上限（LINE_GLOBAL_PER_MIN）——
+  // 換 IP 也只會撞到全體上限（全體被擋時同仁退回選名字＋密碼，功能仍在）。
   const lineByIp = new Map(), lineAll = [];
   const prune = (arr, now) => { while (arr.length && now - arr[0] >= 60e3) arr.shift(); };
+  // ip 為空（沒有 X-Forwarded-For）：只套全體上限——經 Funnel 進來的 socket 一律是本機，拿它分桶等於全部人共用 10 次（#32-8）
   function lineBusy(ip) {
-    const now = Date.now(), key = ip || '-';
+    const now = Date.now();
     prune(lineAll, now);
-    let mine = lineByIp.get(key) || [];
-    prune(mine, now);
-    if (lineByIp.size > 5000) for (const [k, v] of lineByIp) { prune(v, now); if (!v.length) lineByIp.delete(k); }   // 不讓 Map 無限長大
-    if (mine.length >= cfg.LINE_PER_MIN || lineAll.length >= cfg.LINE_GLOBAL_PER_MIN) return true;
-    mine.push(now); lineAll.push(now); lineByIp.set(key, mine); return false;
+    let mine = null;
+    if (ip) {
+      mine = lineByIp.get(ip) || [];
+      prune(mine, now);
+      if (lineByIp.size > 5000) for (const [k, v] of lineByIp) { prune(v, now); if (!v.length) lineByIp.delete(k); }   // 不讓 Map 無限長大
+    }
+    if ((mine && mine.length >= cfg.LINE_PER_MIN) || lineAll.length >= cfg.LINE_GLOBAL_PER_MIN) return true;
+    lineAll.push(now); if (mine) { mine.push(now); lineByIp.set(ip, mine); } return false;
   }
   async function run(action, q, ip) {
     if ((WRITE.has(action) || action === 'uploadFile') && frozen()) return { out: MOVED, revoke: [] };
@@ -258,10 +262,12 @@ function makeApp(cfg) {
     TOO_BIG: [413, { ok: false, code: 'TOO_BIG', message: '檔案太大' }],
     BUSY: [503, { ok: false, code: 'BUSY', message: '系統忙碌，請稍後再試' }]
   };
-  // 來源 IP（只給 lineLogin 限流分桶）：經 Tailscale Funnel 進來的連線 socket 都是本機，取 X-Forwarded-For 第一段；沒有就用 socket 位址
+  // 來源 IP（只給 lineLogin 限流分桶，#32-8）：取 X-Forwarded-For 的「最後一段」（最靠近我們的那一層代理加上的，客戶端自己塞的在前面）；
+  // 沒有這個標頭就回 ''＝只套全體上限（不用 socket 位址：經 Funnel 一律是本機）。
+  // 每 IP 分桶只是防濫用的輔助，實際效果取決於 Funnel 帶的標頭格式——部署時照 DEPLOY.md 附錄 B 用 curl 驗一次。
   function clientIp(req) {
-    const xff = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
-    return (xff || (req.socket && req.socket.remoteAddress) || '').slice(0, 64);
+    const parts = String(req.headers['x-forwarded-for'] || '').split(',').map((x) => x.trim()).filter(Boolean);
+    return (parts.length ? parts[parts.length - 1] : '').slice(0, 64);
   }
   function logLine(action, ms, out) {   // 每請求一行：時間 action 毫秒 ok/code（不記參數，供 #5 的伺服器端 p95）
     console.log(ts() + ' ' + (/^[A-Za-z]{1,32}$/.test(action) ? action : '-') + ' ' + ms + 'ms ' + (out.ok ? 'ok' : String(out.code)));
