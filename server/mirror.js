@@ -18,6 +18,11 @@
  *      （格式同 sig-skip.json；格式錯就 files.ok=false、這一輪不略過任何一個），略過的另計 skipped、不轉黃。
  *      /health：files.stale（待補超過 24 小時）> 0 → 黃；pending > 0 但 stale = 0 是正常排隊，不轉燈。
  *
+ *   4. LINE 綁定刷新（2026-10-09，LINE 自動登入）：經橋接 `clock` 讀打卡名單（只有 lineHash，沒有 LINE userId），
+ *      在一筆寫入交易裡只更新同仁的 lineHash（規則 js/logic.js lineHashUpdates，與 Service.syncClock 共用）——
+ *      不新增、不刪除同仁，不需要管理通行碼。讀不到（橋接失敗）就記一行紀錄、跳過，不影響 ok／fails；結果在 mirror-last.json 的 line。
+ *      --all／--files* 不做。鏡像（第 2 步）送出的同仁一律拿掉 lineHash，試算表不存這一欄的值。
+ *
  * 壞圖只由本機判定（#14 第 5 輪設計簡化，Eason 拍板的「直接驗證」）：
  *   0 位元組；PNG 開頭不是 89 50 4E 47 或結尾沒有 IEND chunk；JPEG 開頭不是 FF D8 FF 或結尾不是 FF D9 → 本機檔損毀，計入 bad、不上傳。
  *   本機驗過的圖，saveSigs 回 null 只剩「Drive 端出錯」（createFile 丟錯），所以 Drive 端失敗一律視為暫時故障：
@@ -382,7 +387,7 @@ async function runMirror(o) {
     try {
       data = { posts: J.rows(db, 'SELECT json FROM posts ORDER BY rowid').map((r) => JSON.parse(r.json)) };
       if (o._betweenReads) o._betweenReads();
-      data.staff = J.rows(db, 'SELECT json FROM staff ORDER BY rowid').map((r) => JSON.parse(r.json));
+      data.staff = J.rows(db, 'SELECT json FROM staff ORDER BY rowid').map((r) => { const x = JSON.parse(r.json); delete x.lineHash; return x; });   // LINE 綁定雜湊不進試算表
       data.reads = J.rows(db, 'SELECT postId, staffId, name, unit, at, sigId, driveSigId FROM reads ORDER BY rowid');
       data.log = J.rows(db, 'SELECT at, action, target, summary FROM log ORDER BY seq');
       left = J.rows(db, TODO_SQL);
@@ -416,6 +421,13 @@ async function runMirror(o) {
   } finally {
     try { if (db) db.close(); } catch (e) {}
   }
+  // ---- 4. LINE 綁定刷新：與鏡像隔開——自己 try/catch、不寫 errs（讀不到就跳過）；--all 不做、空庫不做 ----
+  if (!o.all && dbReady) {
+    try { res.line = await refreshLineHash({ dir, bridge, busyMs: o.busyMs }); }
+    catch (e) { res.line = { ok: false, error: J.errText(e) }; }
+    J.logLine(dir, 'mirror.log', res.line.ok ? `LINE 綁定刷新：更新 ${res.line.updated} 人、已綁定 ${res.line.linked} 人` + (res.line.sourceErrors ? `（${res.line.sourceErrors} 個打卡來源讀不到，那幾店不動）` : '')
+      : 'LINE 綁定刷新跳過：' + res.line.error);
+  }
   // ---- 3. 附件補齊（M7）：與上面完全隔開——自己 try/catch、不寫 errs、不動 ok／pending／fails（D4）；--all 不做（沿用上一輪的 files）----
   const prevFiles = (prev && prev.files) || null;
   try {
@@ -439,6 +451,26 @@ async function runMirror(o) {
   if (res.skipped) J.logLine(dir, 'mirror.log', `人工略過 ${res.skipped} 筆（logs/${SKIP}）：` + res.skippedIds.join('、'));
   if (!o.all && res.files) J.logLine(dir, 'mirror.log', filesText(res.files) + (res.files.failedIds ? '；⚠ 這一輪沒補到：' + res.files.failedIds.join('、') : '') + (res.files.error ? '；' + res.files.error : ''));
   return res;
+}
+
+// 第 4 步：只更新同仁的 lineHash（一筆寫入交易；交易內重讀同仁，伺服器同時寫入也不會被蓋掉其他欄位）
+async function refreshLineHash(o) {
+  const L = require('../js/logic.js');
+  let got;
+  try { got = await o.bridge.call('clock', {}, 90); }
+  catch (e) { return { ok: false, error: '讀打卡名單失敗：' + J.errText(e) }; }
+  if (!got || !Array.isArray(got.rows) || !Array.isArray(got.sources)) return { ok: false, error: '打卡名單格式不符' };
+  const db = J.openDb(o.dir, { busyMs: o.busyMs });
+  try {
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      const staff = J.rows(db, 'SELECT json FROM staff ORDER BY rowid').map((r) => JSON.parse(r.json));
+      const ups = L.lineHashUpdates(staff, got), upd = db.prepare('UPDATE staff SET json = ? WHERE id = ?');
+      ups.forEach((u) => { const s = staff.find((x) => x.id === u.id); s.lineHash = u.lineHash; upd.run(JSON.stringify(s), s.id); });
+      db.exec('COMMIT');
+      return { ok: true, updated: ups.length, linked: staff.filter((s) => s.active && s.lineHash).length, sourceErrors: Array.isArray(got.errors) ? got.errors.length : 0 };
+    } catch (e) { try { db.exec('ROLLBACK'); } catch (y) {} throw e; }
+  } finally { try { db.close(); } catch (e) {} }
 }
 
 // --files／--files-scan：只做第 3 步、不設上限；拿同一把 mirror 鎖（與每小時那輪不重疊）。
@@ -517,4 +549,4 @@ async function main() {
 }
 
 if (require.main === module) main().catch((e) => { console.error(e); process.exit(1); });
-module.exports = { runMirror, runFilesOnly, fillFiles, verifyFiles, SIGS_MAX, localDamaged, exitCode };
+module.exports = { runMirror, runFilesOnly, refreshLineHash, fillFiles, verifyFiles, SIGS_MAX, localDamaged, exitCode };

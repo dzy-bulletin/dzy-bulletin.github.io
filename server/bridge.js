@@ -97,7 +97,9 @@ function makeFakeBridge(delayMs, failAll) {
       revoke: op('revoke', (ids) => ids.forEach((i) => { if (blobs[i]) trash[i] = blobs[i]; delete blobs[i]; })),   // 丟垃圾桶：blobOf 看不到、fileget 仍讀得到
       quota: op('quota', () => ({ limit: 16106127360, usage: 7935000000 }))
     },
-    clockSrc: { read: op('clock', () => JSON.parse(JSON.stringify(clock))) },
+    // 比照 Apps Script：帶入資料的 lineUid（模擬打卡系統的 line_user_id）只交出 lineHash
+    clockSrc: { read: op('clock', () => { const c = JSON.parse(JSON.stringify(clock)); c.rows.forEach((r) => {
+      r.lineHash = r.lineUid ? require('crypto').createHash('sha256').update('dzyb-line:' + r.lineUid, 'utf8').digest('hex') : (r.lineHash || ''); delete r.lineUid; }); return c; }) },
     getClock: () => JSON.parse(JSON.stringify(clock)),
     setClock: (rows) => {
       const n = (src) => rows.filter((r) => r.src === src && r.active).length;

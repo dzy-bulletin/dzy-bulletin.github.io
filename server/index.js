@@ -10,6 +10,8 @@
  *   BODY_IDLE_MS=30000（請求體超過這麼久沒有新資料就中斷）；REQUEST_TIMEOUT_S=180（整個請求上限，含 27MB 附件經 4G 上傳）
  *   E2E=1（只在測試時開：/__seed、/__clock 等測試入口，改用假橋接）；E2E 必須明確指定非預設的 DATA_DIR，且不得設 BRIDGE_URL／BRIDGE_KEY
  *   BRIDGE_FAKE_DELAY_MS（E2E 假橋接每個動作延遲，阻塞測試用）；BRIDGE_FAKE_FAIL=1（E2E 假橋接一律失敗並回 AUTH，驗錯誤碼對應用）
+ *   LINE_CHANNEL_ID=2011292256（選用；LINE 自動登入驗 ID token 用的 LINE Login 頻道 ID，預設就是鼎兆元打卡那個）
+ *   LINE_LOGIN_PER_MIN=30（選用；每分鐘最多幾次 lineLogin，超過回 BUSY——每次都會打 LINE 的 verify API）
  *
  * 不卡住事件迴圈（#6 審查發現 1）：Google 橋接一律 async，在 Service 之外 await。每個請求用自己的 files／clockSrc 墊片建 Service：
  * 墊片需要 Google 時丟出「待橋接」標記（Service 會先做完憑證與格式驗證才走到墊片，所以未授權的請求永遠不會打橋接），
@@ -61,7 +63,10 @@ function config(env) {
     FAKE_DELAY_MS: Number(env.BRIDGE_FAKE_DELAY_MS) || 0,
     FAKE_FAIL: env.BRIDGE_FAKE_FAIL === '1',
     BODY_IDLE_MS: Number(env.BODY_IDLE_MS) > 0 ? Number(env.BODY_IDLE_MS) : 30000,
-    REQUEST_TIMEOUT_MS: (Number(env.REQUEST_TIMEOUT_S) > 0 ? Number(env.REQUEST_TIMEOUT_S) : 180) * 1000
+    REQUEST_TIMEOUT_MS: (Number(env.REQUEST_TIMEOUT_S) > 0 ? Number(env.REQUEST_TIMEOUT_S) : 180) * 1000,
+    LINE_CHANNEL_ID: env.LINE_CHANNEL_ID || '2011292256',
+    LINE_PER_MIN: Number(env.LINE_LOGIN_PER_MIN) > 0 ? Math.floor(Number(env.LINE_LOGIN_PER_MIN)) : 30,
+    LINE_VERIFY_URL: env.LINE_VERIFY_URL || 'https://api.line.me/oauth2/v2.1/verify'   // 只給測試指到本機假 LINE
   };
 }
 // 兩個路徑是否指同一個資料夾：存在就取真實路徑（解開符號連結），macOS APFS 預設不分大小寫，所以一律小寫比對（第 2 輪建議 3）
@@ -74,6 +79,24 @@ function e2eProblem(cfg, env) {
   if (!cfg.DATA_DIR_SET || samePath(cfg.DATA_DIR, defaultDataDir(env))) return 'E2E 測試模式必須用 DATA_DIR 指定一個測試用資料夾（不可是正式資料夾 ~/dzy-bulletin-data），拒絕啟動';
   if (cfg.BRIDGE_URL || cfg.BRIDGE_KEY) return 'E2E 測試模式不能設 BRIDGE_URL／BRIDGE_KEY（測試一律用假橋接；有真金鑰代表這是正式環境），拒絕啟動';
   return '';
+}
+
+// LINE ID token 驗證（lineLogin）：POST LINE 的 verify API → 要求 aud＝本頻道、exp 未過期 → 回 sub（LINE userId）。
+// 憑證無效（LINE 回 4xx）＝null；網路錯誤或逾時（8 秒）丟出業務錯誤，前端退回選名字＋密碼。token 與 sub 都不寫進紀錄。
+async function verifyLineToken(url, channel, idToken, nowMs) {
+  let res, j;
+  try {
+    res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ id_token: idToken, client_id: channel }).toString(), redirect: 'error', signal: AbortSignal.timeout(8000) });
+    if (res.status >= 400 && res.status < 500) return null;
+    if (res.status !== 200) throw new Error('HTTP ' + res.status);
+    j = await res.json();
+  } catch (e) {
+    console.error(new Date().toISOString() + ' LINE 驗證連不上：' + (e && e.name === 'TimeoutError' ? '逾時' : (e && e.message || e)));
+    const be = new Error('LINE 驗證暫時連不上，請選你的名字登入'); be.code = 'LINE_DOWN'; be.business = true; throw be;
+  }
+  if (!j || String(j.aud) !== String(channel) || !(Number(j.exp) * 1000 > (nowMs || Date.now()))) return null;
+  return typeof j.sub === 'string' && j.sub ? j.sub : null;
 }
 
 function makeApp(cfg) {
@@ -128,7 +151,13 @@ function makeApp(cfg) {
         revoke: (ids) => { pre.revoke.push.apply(pre.revoke, ids); },   // 回應送出後才在背景撤銷（原本錯誤就吞掉）
         quota: () => cachedQuota()
       },
-      clockSrc: { read: () => pre.clock || want(pre, async () => { pre.clock = await bridge.clockSrc.read(); }) }
+      clockSrc: { read: () => pre.clock || want(pre, async () => { pre.clock = await bridge.clockSrc.read(); }) },
+      // LINE ID token：第一輪丟待橋接、在交易外 await LINE 的 verify，第二輪拿結果（null＝驗證失敗）。
+      // E2E 模式不連 LINE：只認 'TEST:<uid>'（與本機假資料相同）
+      lineVerify: { verify: (tok) => (pre.line !== undefined ? pre.line : want(pre, async () => {
+        if (E2E) { const m = /^TEST:(.{1,64})$/.exec(String(tok)); pre.line = m ? m[1] : null; return; }
+        pre.line = await verifyLineToken(cfg.LINE_VERIFY_URL, cfg.LINE_CHANNEL_ID, String(tok), Date.now());
+      })) }
     };
   }
 
@@ -138,13 +167,22 @@ function makeApp(cfg) {
   // 每一輪用 q 的深拷貝：Service 會改 q.post（例如把 d.id 換成 prev.id），重跑時要跟 GAS 一樣從原始請求算指紋（S4）。
   const MOVED = { ok: false, code: 'MOVED', message: '系統搬家中，請稍後重新整理' };
   const frozen = () => fs.existsSync(READONLY_FILE);
+  // lineLogin 簡單限流（每個程序、滑動 1 分鐘）：每次都要打 LINE 的 verify API，公開網址不能讓人無限轉送
+  const lineHits = [];
+  function lineBusy() {
+    const now = Date.now();
+    while (lineHits.length && now - lineHits[0] >= 60e3) lineHits.shift();
+    if (lineHits.length >= cfg.LINE_PER_MIN) return true;
+    lineHits.push(now); return false;
+  }
   async function run(action, q) {
     if ((WRITE.has(action) || action === 'uploadFile') && frozen()) return { out: MOVED, revoke: [] };
-    const pre = { shared: new Set(), revoke: [], uploaded: null, clock: null, need: null };
+    if (action === 'lineLogin' && lineBusy()) return { out: { ok: false, code: 'BUSY', message: '登入的人太多，請稍後再試' }, revoke: [] };
+    const pre = { shared: new Set(), revoke: [], uploaded: null, clock: null, line: undefined, need: null };
     for (let round = 0; round < 3; round++) {
       pre.need = null; pre.revoke = [];
       const sh = shims(pre);
-      const svc = makeService_(L, store, sh.files, auth, clock, sh.clockSrc);
+      const svc = makeService_(L, store, sh.files, auth, clock, sh.clockSrc, sh.lineVerify);
       const out = WRITE.has(action)
         ? store.tx(() => { if (frozen()) return MOVED; store.purgeReqs(Date.now()); return svc.call(action, structuredClone(q)); })
         : svc.call(action, structuredClone(q));
@@ -251,7 +289,8 @@ function makeApp(cfg) {
     const staff = d.staff.map((x) => {
       const salt = x.pin ? auth.newSalt() : '';
       return { id: x.id, name: x.name, unit: x.unit, salt, pinHash: x.pin ? auth.hashPin(salt, x.pin) : '', pinVer: 1, fail: x.fail || 0,
-        active: true, createdAt: '2026-01-01T00:00:00.000Z', deletedAt: '', src: x.src || '', store: x.store || '' };
+        active: true, createdAt: '2026-01-01T00:00:00.000Z', deletedAt: '', src: x.src || '', store: x.store || '',
+        lineHash: x.lineUid ? auth.lineHash(x.lineUid) : '' };
     });
     const posts = d.posts.map((p) => Object.assign({ body: '', expiresOn: '', pinned: false, published: true, offOn: '', files: [],
       createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' }, p));
@@ -359,4 +398,4 @@ function main() {
 }
 
 if (require.main === module) main();
-module.exports = { nodeProblem, config, e2eProblem, makeApp, MIN_NODE };
+module.exports = { nodeProblem, config, e2eProblem, makeApp, verifyLineToken, MIN_NODE };

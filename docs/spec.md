@@ -70,6 +70,9 @@ Apps Script Web App（madesiaosinla，以擁有者身分執行、任何人可呼
 | H | 在職 | TRUE／FALSE。**刪除＝改成 FALSE**，簽名紀錄仍對得回姓名 |
 | I | 建立時間 | |
 | J | 刪除時間 | |
+| K | 來源（打卡系統） | `gf|cf|js:emp_id`（2026-09-29 追加，打卡同步用） |
+| L | 門市 | 墨竹亭同仁的門市（2026-09-30 追加） |
+| M | LINE 綁定（雜湊） | `lineHash`（2026-10-09 追加）：`SHA-256('dzyb-line:' + LINE userId)` 小寫 hex，空白＝沒綁。來源是打卡系統 roster 的 `line_user_id`，只在 Apps Script 內轉成雜湊，原始 userId 不離開 Apps Script。**任何 API 回應都不帶這一欄**；Mac mini 是正本時，鏡像寫回試算表的這一欄一律空白 |
 
 ### 分頁 3「已讀」
 | 欄 | 名稱 | 說明 |
@@ -103,6 +106,13 @@ Apps Script Web App（madesiaosinla，以擁有者身分執行、任何人可呼
    - 同仁被刪除時，憑證同樣失效。
 4. 讀公告、看歷史、簽名，都要帶憑證。**附件的 Drive 連結只回給持有憑證的人。**
 
+### LINE 自動登入（2026-10-09 追加）
+- 「鼎兆元打卡」LINE 官方帳號的選單「佈告欄」按鈕開 LIFF（`line.html`，LINE Login 頻道 2011292256；LIFF ID 填在 `js/config.js` 的 `LIFF_ID`，空白時 `line.html` 直接轉首頁）。
+- `line.html`：`liff.init` → 沒登入就 `liff.login` → `liff.getIDToken()` → 呼叫 `lineLogin`。成功就照密碼登入一樣把憑證存進手機、轉首頁；一個 LINE 對到多人就列出遮罩姓名讓本人選；對不到人或任何失敗都轉首頁，選名字畫面上方顯示一次「這個 LINE 還沒對到名單，請選你的名字」。就算手機已記住某人也一律重新呼叫（共用手機、換帳號以 LINE 為準）。
+- 後端向 LINE 驗證 ID token（`POST https://api.line.me/oauth2/v2.1/verify`，`aud` 必須是本頻道、`exp` 未過期），拿到的 `sub` 算成 `lineHash` 比對在職同仁。
+- **LINE 登入不看也不動密碼與連錯次數**：沒設密碼、密碼被鎖住的人都能用 LINE 登入（鎖定保護的是 4 位數密碼被猜；LINE ID token 是另一個獨立證明）。發的憑證與密碼登入同一種，重設密碼（pinVer +1）一樣讓它失效。因此同仁憑證的驗證不再要求「已設密碼」。
+- 綁定來源：主管按「打卡同步」時更新；Mac mini 每小時鏡像工作（`server/mirror.js` 第 4 步）也會只刷新 `lineHash`（不新增、不刪除同仁）。打卡離職或解除綁定 → 清空。
+
 ### 密碼防猜
 - 4 位數只有 1 萬種組合，所以錯誤次數全部**由後端判斷**，前端顯示的次數只是提示。
 - **連續錯 3 次就鎖住，直到主管在「設定 → 同仁名單」按「重設密碼」**（Eason 2026-09-29 定案）。中間輸對一次就重新計算。
@@ -135,6 +145,7 @@ Apps Script Web App（madesiaosinla，以擁有者身分執行、任何人可呼
 | `roster` | — | — | `[{id, name(遮罩), unit, store, hasPin, locked}]`（只列在職；Code.js 以 CacheService 快取結果 10 分鐘，世代換了即失效） |
 | `setPin` | — | `staffId, pin` | `{token, me, board}`（board 同 `board` 回傳，登入少一次往返） |
 | `login` | — | `staffId, pin` | `{token, me, board}`；錯誤時 code＝`BAD_PIN`（附剩餘次數）／`LOCKED`（需主管重設） |
+| `lineLogin` | — | `idToken`（LIFF 的 LINE ID token）, `staffId?`（對到多人時本人選的那位） | 對到一人：`{token, me, board}`（同 `login`）；多人且沒帶 staffId：`{choices:[{id, name(遮罩), unit}]}`；錯誤 code＝`LINE_NOT_LINKED`（對不到在職同仁，或 staffId 不在對到的人裡）／`LINE_BAD`（LINE 驗證失敗）／`LINE_DOWN`（連不上 LINE）／`BUSY`（Mac mini 每分鐘超過 30 次）。寫入類動作（上鎖），但不寫任何資料；不記錄 idToken 與 LINE userId |
 | `board` | 同仁憑證 | — | `{today, me, posts:[上架中，三個單位全部], myReads:{postId: 簽名時間}}` |
 | `history` | 同仁憑證 | — | `{today, posts:[已下架], myReads:{postId: 簽名時間}}` |
 | `ack` | 同仁憑證 | `postId, sig` | `{at}`；已經簽過回 code＝`ALREADY` |
@@ -149,7 +160,7 @@ Apps Script Web App（madesiaosinla，以擁有者身分執行、任何人可呼
 | `staffSetStore` | 管理憑證 | `staffId, store`（只限墨竹亭同仁） | — |
 | `staffDelete` | 管理憑證 | `staffId` | — |
 | `staffResetPin` | 管理憑證 | `staffId` | — |
-| `syncClock` | 管理憑證 | — | `{added:[姓名（單位）], adopted, left:[{id,name,unit}], counts:{來源:在職人數}, errors:[]}`（2026-09-29 追加：從小辛辣光復、央廚、墨竹亭金山打卡系統 roster 唯讀同步；只新增，打卡已離職者只列出不刪；同仁表新增「來源」欄 `src`＝`gf|cf|js:emp_id`） |
+| `syncClock` | 管理憑證 | — | `{added:[姓名（單位）], adopted, left:[{id,name,unit}], counts:{來源:在職人數}, errors:[]}`（2026-09-29 追加：從小辛辣光復、央廚、墨竹亭金山打卡系統 roster 唯讀同步；只新增，打卡已離職者只列出不刪；同仁表新增「來源」欄 `src`＝`gf|cf|js:emp_id`；2026-10-09 起同時更新 `lineHash`：在職→打卡名單的綁定、離職或沒綁→清空，讀取失敗的那店不動） |
 
 - 所有寫入都用 `LockService` 排隊，避免兩個人同時上架時流水號重複。
 - 後端的日期一律用 `Asia/Taipei`。

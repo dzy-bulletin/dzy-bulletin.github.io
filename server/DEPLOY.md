@@ -832,6 +832,14 @@ echo "更新程式：$OLD → $NEW（$(date '+%F %T')）" >> "$DATA/logs/deploy-
 **`sig-state.json` 的相容性**（從 M3 定稿前的版本升上來時）：舊版會在 `$DATA/logs/sig-state.json` 寫 `{ "fails": {…}, "unsaved": {…} }`（fails 是舊的「連續失敗 3 次判壞圖」計數）。新版只讀 `unsaved`（鍵的格式相同，照常沿用），**忽略 `fails`**，下一次寫檔時自然去掉；壞圖改由本機檢查圖檔判定。所以**什麼都不用做，也不要刪這個檔**（刪掉會讓 `unsaved` 裡已上傳的圖重傳成孤兒檔）。M4 階段資料庫是空的，這個檔通常根本不存在。
 舊版「把某張從 `sig-state.json` 刪掉就會重試」的做法已經作廢，改用故障排除 E 的 `sig-skip.json`（只用來略過，不用來重試）。
 
+**LINE 自動登入（2026-10-09，v0.7.0）**：
+- 順序：**先部署 GAS、再更新 Mac mini**。新 GAS 的橋接 `clock` 會多回每人的 `lineHash`（打卡 roster 的 `line_user_id` 在 Apps Script 內就轉成雜湊）；Mac mini 先更新也不會壞，只是 `lineHash` 一直是空的、LINE 登入全部「對不到人」退回選名字。
+- `server/.env` **選用**兩個鍵（不設就用預設，不用改 `.env`）：`LINE_CHANNEL_ID`（LINE Login 頻道 ID，預設 `2011292256`）、`LINE_LOGIN_PER_MIN`（每分鐘最多幾次 `lineLogin`，預設 30，超過回 BUSY）。改了要重啟伺服器。
+- 伺服器要能連 `https://api.line.me`（驗 ID token，逾時 8 秒）；連不上時同仁看到「LINE 驗證暫時連不上」並退回選名字，不影響其他功能。
+- 更新後**重啟伺服器**（照上面），`lineLogin` 才會生效；`lineHash` **在下一輪每小時 mirror 時自動填上**（`mirror.log` 會有一行「LINE 綁定刷新：更新 N 人、已綁定 M 人」，`mirror-last.json` 的 `line`）。不想等就請主管在設定頁按一次「打卡同步」（同樣會填）。讀打卡名單失敗只記一行、跳過，不影響鏡像燈號。
+- 鏡像寫回試算表的「LINE 綁定（雜湊）」欄一律空白（試算表不存）；回退到 GAS 後，主管按一次「打卡同步」就會重新填。
+- GAS 端的 `lineLogin`（只在回退到 GAS 時用到）要呼叫 `UrlFetchApp`，需要 `https://www.googleapis.com/auth/script.external_request` 權限；`gas/appsscript.json` **刻意還沒加**（加了之後 Eason 要在編輯器重新授權一次，授權前整個 Web App 與橋接都會失敗）。沒加的期間 GAS 的 `lineLogin` 回 SERVER、前端退回選名字＋密碼。
+
 ---
 
 ## 附錄 C：M7 附件備份上線（已部署的機器，#18）

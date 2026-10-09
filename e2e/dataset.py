@@ -100,11 +100,17 @@ def make(seed, today):
             if must_sign(s['unit'], p) and rng.random() < rate:
                 reads.append({'postId': p['id'], 'staffId': s['id'], 'at': '%sT0%d:%02d:00.000Z' % (p['publishOn'], rng.randint(1, 9), rng.randint(0, 59))})
 
+    # LINE 自動登入（2026-10-09）：一位單獨綁定、兩位綁同一個 LINE（測選人畫面）；另用一支亂數，不影響上面的抽樣
+    rl = random.Random(seed * 7 + 3)
+    lpool = [s for s in staff if s.get('fail', 0) < 3]
+    solo, sh1, sh2 = rl.sample(lpool, 3)
+    solo['lineUid'] = 'U-solo'; sh1['lineUid'] = 'U-shared'; sh2['lineUid'] = 'U-shared'
+
     # 打卡名單（同步用）：從現有同仁挑幾位對應，再加幾位新人、幾位離職
     clock = []
     for src, unit in (('gf', 'mala'), ('cf', 'cf'), ('js', 'mzt')):
         for s in [x for x in staff if x['unit'] == unit][:rng.randint(0, 2)]:
-            clock.append({'src': src, 'unit': unit, 'store': '金山' if src == 'js' else '', 'empId': src.upper() + s['id'][-3:], 'name': s['name'], 'active': True})
+            clock.append({'src': src, 'unit': unit, 'store': '金山' if src == 'js' else '', 'empId': src.upper() + s['id'][-3:], 'name': s['name'], 'active': True, 'lineUid': s.get('lineUid', '')})
         for i in range(rng.randint(1, 3)):
             clock.append({'src': src, 'unit': unit, 'store': '金山' if src == 'js' else '', 'empId': src.upper() + 'N%d' % i, 'name': name(), 'active': True})
         clock.append({'src': src, 'unit': unit, 'store': '金山' if src == 'js' else '', 'empId': src.upper() + 'X', 'name': name(), 'active': False})
@@ -112,6 +118,7 @@ def make(seed, today):
     admin_pass = 'E2E' + ''.join(rng.choice('abcdefghjk23456789') for _ in range(6))
     data = {'staff': staff, 'posts': posts, 'reads': reads, 'clock': clock, 'adminPass': admin_pass}
     data['firsts'] = firsts
+    data['line'] = {'solo': solo['id'], 'shared': sorted([sh1['id'], sh2['id']])}
     return data
 
 

@@ -16,8 +16,10 @@ var DZYB_MOCK = (function () {
     }
     return out.slice(0, len);
   }
+  // sha256Hex 用真的 SHA-256（js/sha256.js）：LINE 登入的 lineHash 必須與正式後端算出同一個值（測試向量見 test/line.test.js）
+  var sha = G.DZYB_SHA256 ? G.DZYB_SHA256.hex : function (s) { return fakeHex(s, 64); };
   var fakeCrypto = {
-    sha256Hex: function (s) { return fakeHex(s, 64); },
+    sha256Hex: function (s) { return sha(s); },
     hmacB64url: function (k, m) { return fakeHex(k + '|' + m, 43); },
     randomHex: function (n) { var s = ''; while (s.length < n * 2) s += Math.floor(Math.random() * 16).toString(16); return s; }
   };
@@ -28,7 +30,8 @@ var DZYB_MOCK = (function () {
     var staff = d.staff.map(function (x) {
       var salt = x.pin ? 'e2e-' + x.id : '';
       return { id: x.id, name: x.name, unit: x.unit, salt: salt, pinHash: x.pin ? auth.hashPin(salt, x.pin) : '',
-        pinVer: 1, fail: x.fail || 0, active: true, createdAt: '2026-01-01T00:00:00.000Z', deletedAt: '', src: x.src || '', store: x.store || '' };
+        pinVer: 1, fail: x.fail || 0, active: true, createdAt: '2026-01-01T00:00:00.000Z', deletedAt: '', src: x.src || '', store: x.store || '',
+        lineHash: x.lineUid ? auth.lineHash(x.lineUid) : '' };   // 帶入資料的 lineUid＝模擬打卡系統已綁定的 LINE userId
     });
     var posts = d.posts.map(function (p) {
       return { id: p.id, title: p.title, body: p.body || '', units: p.units, publishOn: p.publishOn, expiresOn: p.expiresOn || '',
@@ -88,10 +91,15 @@ var DZYB_MOCK = (function () {
   // 模擬打卡系統名單（來自注入資料或示範資料）
   var CLOCK = (G.__E2E_DATA || G.DZYB_DEMO(L)).clock || [];
   var clockSrc = { read: function () {
-    return { rows: JSON.parse(JSON.stringify(CLOCK)), errors: [], sources: ['gf', 'cf', 'js'],
+    var rows = CLOCK.map(function (r) {                           // 比照 Apps Script：只交出 lineHash，不交出 LINE userId
+      var o = JSON.parse(JSON.stringify(r)); o.lineHash = r.lineUid ? auth.lineHash(r.lineUid) : ''; delete o.lineUid; return o;
+    });
+    return { rows: rows, errors: [], sources: ['gf', 'cf', 'js'],
       counts: { '小辛辣光復店': CLOCK.filter(function (r) { return r.src === 'gf' && r.active; }).length, '央廚': CLOCK.filter(function (r) { return r.src === 'cf' && r.active; }).length, '墨竹亭金山店': CLOCK.filter(function (r) { return r.src === 'js' && r.active; }).length } };
   } };
-  var svc = G.makeService_(L, store, files, auth, clock, clockSrc);
+  // 本機假資料的 LINE 驗證：只認 'TEST:<uid>'（line.html?mode=local&test_uid=… 用），其他一律當驗證失敗
+  var lineVerify = { verify: function (tok) { var m = /^TEST:(.{1,64})$/.exec(String(tok || '')); return m ? m[1] : null; } };
+  var svc = G.makeService_(L, store, files, auth, clock, clockSrc, lineVerify);
 
   return {
     call: function (action, req) {

@@ -14,16 +14,20 @@ function makeAuth_(c, rules) {
     return r === 0;
   }
   function newSalt() { return c.randomHex(16); }
+  // LINE userId（verify 回來的 sub）→ 同仁表的 lineHash；三個後端輸出必須相同（test/line.test.js 測試向量）
+  function lineHash(sub) { return c.sha256Hex((rules.LINE_HASH_PREFIX || 'dzyb-line:') + String(sub)); }
   function hashPin(salt, pin) { return c.sha256Hex(salt + pin); }            // C8
 
   // C6
   function makeStaffToken(secret, id, ver) {
     return id + '.' + ver + '.' + c.hmacB64url(secret, id + '|' + ver);
   }
-  // row = {id, pinHash, pinVer, active}；回傳 true／false
+  // row = {id, pinVer, active}；回傳 true／false
+  // 2026-10-09（LINE 自動登入）起不再要求 row.pinHash：沒設密碼的同仁也能用打卡綁定的 LINE 登入。
+  // 安全性仍靠 pinVer：清掉密碼的唯一途徑（重設密碼）一定讓 pinVer +1，舊憑證照樣全部失效；設定密碼（setPin）也 +1。
   function verifyStaffToken(secret, token, row) {
     var p = String(token || '').split('.');
-    if (p.length !== 3 || !row || !row.active || !row.pinHash) return false;
+    if (p.length !== 3 || !row || !row.active) return false;
     if (p[0] !== row.id || String(p[1]) !== String(row.pinVer)) return false;
     return safeEq(p[2], c.hmacB64url(secret, p[0] + '|' + p[1]));
   }
@@ -61,7 +65,7 @@ function makeAuth_(c, rules) {
   }
 
   return {
-    newSalt: newSalt, hashPin: hashPin, safeEq: safeEq,
+    newSalt: newSalt, hashPin: hashPin, safeEq: safeEq, lineHash: lineHash,
     makeStaffToken: makeStaffToken, verifyStaffToken: verifyStaffToken, staffIdOf: staffIdOf,
     makeAdminToken: makeAdminToken, verifyAdminToken: verifyAdminToken,
     staffLogin: staffLogin, adminLogin: adminLogin

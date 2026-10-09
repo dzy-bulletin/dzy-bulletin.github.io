@@ -37,7 +37,9 @@ eq('token tampered', A.verifyStaffToken(SECRET, tampered, row), false);
 eq('token other id', A.verifyStaffToken(SECRET, tok.replace('S-007', 'S-008'), Object.assign({}, row, { id: 'S-008' })), false);
 eq('token after reset (ver+1)', A.verifyStaffToken(SECRET, tok, Object.assign({}, row, { pinVer: 3 })), false);
 eq('token inactive', A.verifyStaffToken(SECRET, tok, Object.assign({}, row, { active: false })), false);
-eq('token no pin', A.verifyStaffToken(SECRET, tok, Object.assign({}, row, { pinHash: '' })), false);
+// 2026-10-09 LINE 登入：沒設密碼也能持有憑證（安全性靠 pinVer：重設密碼一定 +1）
+eq('token no pin, same ver (LINE login)', A.verifyStaffToken(SECRET, tok, Object.assign({}, row, { pinHash: '' })), true);
+eq('token no pin after reset (ver+1)', A.verifyStaffToken(SECRET, tok, Object.assign({}, row, { pinHash: '', pinVer: 3 })), false);
 eq('token wrong secret', A.verifyStaffToken('other', tok, row), false);
 eq('token garbage', A.verifyStaffToken(SECRET, 'x', row), false);
 eq('token null', A.verifyStaffToken(SECRET, null, row), false);

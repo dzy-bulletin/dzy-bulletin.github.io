@@ -4,6 +4,7 @@ global.DZYB = require('../js/logic.js');
 global.makeAuth_ = require('../gas/Auth.js').makeAuth_;
 global.makeService_ = require('../gas/Service.js').makeService_;
 global.DZYB_DEMO = require('../js/demo-data.js');
+global.DZYB_SHA256 = require('../js/sha256.js');             // 本機假後端的 lineHash 用真的 SHA-256（與正式後端相同）
 // DRIVER=server：同一套契約測試改打真的 Mac mini 伺服器（需先以 E2E=1 啟動，SERVER=http://127.0.0.1:8793）
 let M, C;
 if (process.env.DRIVER === 'server') {
@@ -152,6 +153,13 @@ eq('staffAdd empty', call('staffAdd', { atoken: at, name: ' ', unit: 'cf' }).cod
 r = C('staffAdd', { atoken: at, name: '新同仁', unit: 'cf' });
 eq('staffAdd ok', [r.ok, r.data.staff.id], [true, 'S-019']);
 eq('staffAdd dup', C('staffAdd', { atoken: at, name: '新同仁', unit: 'cf' }).code, 'BAD_REQ');
+// LINE 自動登入（2026-10-09）：示範資料 S-001 綁 U-demo-001
+{ const r1 = call('lineLogin', { idToken: 'TEST:U-demo-001' });
+  eq('lineLogin linked', [r1.ok, r1.data && r1.data.me.id, !!(r1.data && r1.data.board)], [true, 'S-001', true]);
+  eq('lineLogin token reads board', C('board', { token: r1.data.token }).data.me.id, 'S-001');
+  eq('lineLogin not linked', C('lineLogin', { idToken: 'TEST:U-nobody' }).code, 'LINE_NOT_LINKED');
+  eq('lineLogin bad token', C('lineLogin', { idToken: 'not-a-test-token' }).code, 'LINE_BAD');
+  eq('roster has no lineHash', JSON.stringify(C('roster').data).includes('lineHash'), false); }
 eq('staffDelete', call('staffDelete', { atoken: at, staffId: 'S-001' }).ok, true);
 eq('deleted not in roster', C('roster').data.some(s => s.id === 'S-001'), false);
 r = C('receipts', { atoken: at, postId: 'P-20260920-001' });
@@ -223,7 +231,7 @@ eq('unknown action', C('hack', {}).code, 'BAD_REQ');
 { const code = require('fs').readFileSync(__dirname + '/../gas/Code.js', 'utf8'); const m = /var WRITE_ACTIONS_ = (\[[^\]]*\])/.exec(code);
   const svcW = require('../gas/Service.js').makeService_(DZYB, {}, {}, {}, {}).WRITE_ACTIONS;
   eq('Code.js WRITE_ACTIONS_ matches Service', JSON.stringify(eval(m[1]).sort()), JSON.stringify(svcW.slice().sort())); }
-eq('all 18 actions covered', seen.size, 18);
+eq('all 19 actions covered', seen.size, 19);
 
 // （放最後：會把管理登入鎖住）
 M.setAdminInit('abc');

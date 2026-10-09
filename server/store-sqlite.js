@@ -54,7 +54,8 @@ function makeSqliteStore(dir) {
   const store = {
     getPosts: () => db.prepare('SELECT json FROM posts ORDER BY rowid').all().map((r) => JSON.parse(r.json)),
     savePost: (p) => { upsertPost.run(p.id, JSON.stringify(p)); },
-    getStaff: () => db.prepare('SELECT json FROM staff ORDER BY rowid').all().map((r) => JSON.parse(r.json)),
+    // 同仁存成 JSON：新欄位不需要 ALTER TABLE；舊資料沒有 lineHash（2026-10-09 LINE 自動登入）→ 讀出時補 ''
+    getStaff: () => db.prepare('SELECT json FROM staff ORDER BY rowid').all().map((r) => { const s = JSON.parse(r.json); if (typeof s.lineHash !== 'string') s.lineHash = ''; return s; }),
     saveStaff: (s) => { upsertStaff.run(s.id, JSON.stringify(s)); },
     getReads: () => db.prepare('SELECT postId, staffId, name, unit, at, sigId FROM reads ORDER BY rowid').all().map((r) => Object.assign({}, r)),
     addRead: (r) => {

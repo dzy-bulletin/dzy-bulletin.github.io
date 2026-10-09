@@ -417,6 +417,37 @@ def main():
             click('#resetDemo', '重置假資料'); pg.wait_for_selector('[data-pu]', timeout=8000); scan('重置後')
             check('B 重置假資料後回到選名字', '請選擇你是誰' in text('.sheet .bar'))
 
+            # =============== 階段 L：LINE 自動登入（line.html 本機模擬，不經 LIFF）===============
+            print('— 階段 L：LINE 自動登入 —')
+            LN = data['line']; solo = W.staff[LN['solo']]
+            HOME_RE = _re.compile(r'/index\.html\?mode=local$')
+            def line_go(uid):
+                pg.goto(BASE + '/line.html?mode=local' + ('&test_uid=' + uid if uid else ''))
+            def at_home(): pg.wait_for_url(HOME_RE, timeout=8000); pg.wait_for_selector('#app .card, #app .empty, [data-pu]', timeout=8000); wait(400)
+            line_go(None); at_home()
+            check('L 沒設 LIFF_ID、沒帶測試帳號：直接轉首頁', bool(HOME_RE.search(pg.url)) and pg.locator('#pkNotice').count() == 0, pg.url)
+            line_go('U-solo'); at_home()
+            check('L 綁定一人：自動登入並回首頁（不用選名字）', pg.locator('#meName').count() == 1 and text('#meName').startswith(solo['name']), pg.locator('#meName').all_inner_texts())
+            check('L 登入後首頁有公告列表', pg.locator('#app .card, #app .empty').count() > 0)
+            line_go('U-shared'); pg.wait_for_selector('.sheet [data-pick]', timeout=8000); wait(300); scan('LINE 選人'); shot('L01-LINE選人')
+            got = pg.evaluate("[...document.querySelectorAll('.sheet [data-pick]')].map(b => b.dataset.pick + ' ' + b.innerText.split('\\n')[0])")
+            exp = [i + ' ' + D.mask(W.staff[i]['name']) for i in LN['shared']]
+            check('L 一個 LINE 對到兩人：列出遮罩姓名讓本人選', got == exp, f'{got} vs {exp}')
+            pick = LN['shared'][1]
+            click(f'.sheet [data-pick="{pick}"]', 'LINE 選人→登入'); at_home()
+            check('L 選人後以該同仁登入', text('#meName').startswith(W.staff[pick]['name']), text('#meName'))
+            line_go('U-shared'); pg.wait_for_selector('#lcNone', timeout=8000); wait(300); scan('LINE 選人')
+            click('#lcNone', '都不是我→回首頁'); at_home()
+            check('L 「都不是我」回首頁、不改登入的人', text('#meName').startswith(W.staff[pick]['name']))
+            line_go('U-nobody'); at_home()
+            check('L 對不到人（已登入）：回首頁並提示一次', '還沒對到名單' in text('#toast'), text('#toast'))
+            click('#chgMe', '不是我→登出'); pg.wait_for_selector('[data-pu]')
+            line_go('U-nobody'); at_home(); pg.wait_for_selector('#pkNotice', timeout=8000)
+            check('L 對不到人（未登入）：選名字畫面上方顯示提示', '還沒對到名單' in text('#pkNotice'), text('#pkNotice'))
+            pg.reload(); pg.wait_for_selector('[data-pu]', timeout=8000); wait(300)
+            check('L 提示只顯示一次（重新整理後消失）', pg.locator('#pkNotice').count() == 0)
+            scan('選名字')
+
         try: moved_check(b)
         except Exception as e: check('M 後端搬家檢查執行中斷（可能是重載迴圈）', False, repr(e))
         try: netfail_check(b)

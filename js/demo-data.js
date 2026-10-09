@@ -8,7 +8,8 @@ var DZYB_DEMO = function (L) {
     ['S-009', '蔡明哲', 'cf'], ['S-010', '楊佩琪', 'cf'], ['S-011', '許文傑', 'cf'], ['S-012', '鄭宜萱', 'cf'],
     ['S-013', '測試員甲', 'mala'], ['S-014', '測試員乙', 'mzt', '光復'], ['S-015', '測試員丙', 'cf'],
     ['S-016', '周總經理', 'hq-dzy'], ['S-017', '孫品牌經理', 'hq-mzt'], ['S-018', '趙營運督導', 'hq-mala']
-  ].map(function (r) { return { id: r[0], name: r[1], unit: r[2], store: r[3] || '', pin: r[1].indexOf('測試員') === 0 ? null : '0000', fail: 0 }; });
+  ].map(function (r) { return { id: r[0], name: r[1], unit: r[2], store: r[3] || '', pin: r[1].indexOf('測試員') === 0 ? null : '0000', fail: 0,
+    lineUid: r[0] === 'S-001' ? 'U-demo-001' : '' }; });   // lineUid＝模擬打卡系統綁定的 LINE（本機預覽：line.html?mode=local&test_uid=U-demo-001）
   var F = function (id, name, mb) { return { id: id, name: name, type: L.fileType(name), size: Math.round(mb * 1048576) }; };
   var P = function (o) { return Object.assign({ published: true, offOn: '', expiresOn: '', pinned: false, files: [], body: '' }, o); };
   var posts = [
@@ -40,7 +41,7 @@ var DZYB_DEMO = function (L) {
     R('P-20260910-001', 'S-001', '2026-09-11T02:00:00.000Z'), R('P-20260801-001', 'S-001', '2026-08-02T02:00:00.000Z')
   ];
   var clock = [
-    { src: 'gf', unit: 'mala', empId: 'A01', name: '陳大安', active: true },
+    { src: 'gf', unit: 'mala', empId: 'A01', name: '陳大安', active: true, lineUid: 'U-demo-001' },
     { src: 'gf', unit: 'mala', empId: 'A02', name: '光復新人', active: true },
     { src: 'gf', unit: 'mala', empId: 'A03', name: '已離職員工', active: false },
     { src: 'cf', unit: 'cf', empId: 'CF01', name: '蔡明哲', active: true },
