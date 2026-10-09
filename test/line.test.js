@@ -47,6 +47,10 @@ const H1 = A.lineHash('U1'), H2 = A.lineHash('U2');
     L.lineHashUpdates(staff, got), [{ id: 'S-1', lineHash: H1, bump: false }, { id: 'S-2', lineHash: '', bump: true }, { id: 'S-5', lineHash: '', bump: true }, { id: 'S-6', lineHash: '', bump: true }]);
   eq('lineHashUpdates：同一工號重複，在職有綁定的優先', L.lineHashUpdates([{ id: 'S-1', src: 'gf:A1', lineHash: '' }],
     { sources: ['gf'], rows: [{ src: 'gf', empId: 'A1', active: true, lineHash: H1 }, { src: 'gf', empId: 'A1', active: false, lineHash: '' }] }), [{ id: 'S-1', lineHash: H1, bump: false }]);
+  eq('lineHashUpdates：來源的列完全沒有 lineHash 欄位（橋接舊版）→ 那店整店不動、不 bump',
+    L.lineHashUpdates([{ id: 'S-1', src: 'gf:A1', lineHash: H1 }, { id: 'S-2', src: 'js:B1', lineHash: H2 }],
+      { sources: ['gf', 'js'], rows: [{ src: 'gf', empId: 'A1', active: true }, { src: 'js', empId: 'B1', active: true, lineHash: '' }] }),
+    [{ id: 'S-2', lineHash: '', bump: true }]);
   eq('lineHashUpdates：改綁別的 LINE→bump', L.lineHashUpdates([{ id: 'S-1', src: 'gf:A1', lineHash: H1 }], { sources: ['gf'], rows: [{ src: 'gf', empId: 'A1', active: true, lineHash: H2 }] }), [{ id: 'S-1', lineHash: H2, bump: true }]);
   eq('lineHashUpdates：沒變就不列', L.lineHashUpdates([{ id: 'S-1', src: 'gf:A1', lineHash: H1 }], { sources: ['gf'], rows: [{ src: 'gf', empId: 'A1', active: true, lineHash: H1 }] }), []);
 }
