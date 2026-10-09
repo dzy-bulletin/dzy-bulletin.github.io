@@ -94,5 +94,55 @@ const clock = { nowMs: () => Date.now(), today: () => '2026-10-10' };
   eq('lineHashUpdates：沒 resolve 的話會被清掉（證明合併有作用）', L.lineHashUpdates(old, { rows: raw, sources: ['gf', 'js', 'mgf'] }), [{ id: 'S-9', lineHash: '', bump: true }]);
 }
 
+// ---------- 3. 第 1 輪審查（#33）P1–P8 的情境 ----------
+{ const at = A.makeAdminToken('SECRET', 1, Date.now() + 60e3);
+  const mk = (staff, raw, P, sources) => { const st = memStore(staff);
+    const read = () => { const r = L.resolveClockRows(raw, P, LAB); return { rows: r.rows, messages: r.messages, errors: [], sources: sources || ['gf', 'js', 'mgf'], counts: {} }; };
+    return { st, read, sv: makeService_(L, st, { quota: () => null }, A, clock, { read }, { verify: () => null }), by: (id) => st.d.staff.find((s) => s.id === id) }; };
+  // P1：主店那小時讀取失敗 → 還掛舊店的同仁 hold，lineHash 不清、不登出；也不被列成已離職
+  { const raw = [R('js', 'mzt', 'J1', '甲', { lineHash: H1 })];
+    const t = mk([S0('S-1', '甲', 'mzt', { src: 'js:J1', lineHash: H1, pinVer: 2 })], raw, { 甲: { src: 'mgf' } }, ['gf', 'js']);
+    eq('P1：主店讀取失敗 → lineHashUpdates 不動', L.lineHashUpdates(t.st.d.staff, t.read()), []);
+    const r = t.sv.call('syncClock', { atoken: at });
+    eq('P1：syncClock 不新增、不登出、不列離職', [t.st.d.staff.length, t.by('S-1').pinVer, t.by('S-1').lineHash, r.data.left], [1, 2, H1, []]); }
+  // P2：非主店（舊店）這輪讀取失敗 → aka 是空的，仍用名字改掛，不新增第二筆
+  { const t = mk([S0('S-1', '甲', 'mzt', { src: 'js:J1', store: '金山', lineHash: H1 })], [R('mgf', 'mzt', 'G4', '甲', { lineHash: H1 })], { 甲: { src: 'mgf' } }, ['gf', 'mgf']);
+    t.sv.call('syncClock', { atoken: at });
+    eq('P2：舊店沒讀到也改掛主店、不重複', [t.st.d.staff.length, t.by('S-1').src, t.by('S-1').store], [1, 'mgf:G4', '光復']); }
+  // P3：主店有兩位在職同名 → hold、訊息，不合併 LINE、不登出任何人
+  { const raw = [R('mgf', 'mzt', 'G1', '甲', { lineHash: H1 }), R('mgf', 'mzt', 'G2', '甲', { lineHash: H2 }), R('js', 'mzt', 'J1', '甲')];
+    const res = L.resolveClockRows(raw, { 甲: { src: 'mgf' } }, LAB);
+    eq('P3：全部 hold、綁定不合併', [res.rows.map((r) => r.hold), res.rows.map((r) => r.lineHash)], [[true, true, true], [H1, H2, '']]);
+    eq('P3：訊息', res.messages, ['「甲」在主店（墨竹亭光復店）有 2 位在職同名，分不出是哪一位，暫不同步']); }
+  // P4：判定前舊店已標離職 → mirror 先跑也不登出；同步時改掛主店、不新增、不列離職
+  { const raw = [R('js', 'mzt', 'J1', '甲', { active: false, lineHash: H1 }), R('mgf', 'mzt', 'G4', '甲', { lineHash: H1 })];
+    const t = mk([S0('S-1', '甲', 'mzt', { src: 'js:J1', lineHash: H1, pinVer: 1 })], raw, { 甲: { src: 'mgf' } });
+    eq('P4：mirror 先跑 → 舊來源同仁綁定不清', L.lineHashUpdates(t.st.d.staff, t.read()), []);
+    const r = t.sv.call('syncClock', { atoken: at });
+    eq('P4：改掛、不新增、不登出、不列離職', [t.st.d.staff.length, t.by('S-1').src, t.by('S-1').pinVer, r.data.left], [1, 'mgf:G4', 1, []]); }
+  // P5：舊店那筆在佈告欄已手動刪除 → 不加回、也不新增
+  { const t = mk([S0('S-1', '甲', 'mzt', { src: 'js:J1', active: false, deletedAt: 'x' })], [R('js', 'mzt', 'J1', '甲'), R('mgf', 'mzt', 'G4', '甲')], { 甲: { src: 'mgf' } });
+    t.sv.call('syncClock', { atoken: at });
+    eq('P5：手動刪除的不加回', [t.st.d.staff.length, t.by('S-1').active], [1, false]); }
+  // P6：判定表名字打錯／缺 src 有提示
+  eq('P6：判定表的名字在名冊找不到、缺 src', L.resolveClockRows([R('gf', 'mala', 'E1', '甲'), R('js', 'mzt', 'J1', '甲')], { 甲: {}, 乙乙: { src: 'gf' } }, LAB).messages,
+    ['「甲」的主店判定缺少 src，暫不同步', '主店判定表裡的「乙乙」在讀到的名冊裡都找不到（名字打錯、已移除，或那家店這次沒讀到）']);
+  // P7：改掛後從主店離職、別店仍在職 → hold＋請重新判定；不登出、不列離職
+  { const raw = [R('mgf', 'mzt', 'G4', '甲', { active: false, lineHash: H1 }), R('js', 'mzt', 'J1', '甲', { lineHash: H1 })];
+    const t = mk([S0('S-1', '甲', 'mzt', { src: 'mgf:G4', lineHash: H1, pinVer: 1 })], raw, { 甲: { src: 'mgf' } });
+    const r = t.sv.call('syncClock', { atoken: at });
+    eq('P7：不登出、不列離職、請重新判定', [t.by('S-1').pinVer, t.by('S-1').lineHash, r.data.left, r.data.errors],
+      [1, H1, [], ['「甲」在主店（墨竹亭光復店）已離職，但 墨竹亭金山店（J1） 仍在職，請 Eason 重新判定主店（暫不同步）']]); }
+  // P8：只判定 src 的人，主管手動改的門市不被蓋回；有寫 unit 的照判定
+  { const t = mk([S0('S-1', '甲', 'mzt', { src: 'mgf:G4', store: '六張犁' }), S0('S-2', '乙', 'mzt', { src: 'mgf:G1', store: '光復' })],
+      [R('mgf', 'mzt', 'G4', '甲'), R('js', 'mzt', 'J1', '甲'), R('mgf', 'mzt', 'G1', '乙')], { 甲: { src: 'mgf' }, 乙: { src: 'mgf', unit: 'hq-mzt', store: '' } });
+    t.sv.call('syncClock', { atoken: at });
+    eq('P8：手動門市保留；有寫 unit 的照判定', [t.by('S-1').store, t.by('S-2').unit, t.by('S-2').store], ['六張犁', 'hq-mzt', '']); }
+  // 兩筆都在職時優先改掛 aka 裡那筆
+  { const t = mk([S0('S-1', '甲', 'mala', { src: 'gf:X9' }), S0('S-2', '甲', 'mzt', { src: 'js:J1' })], [R('js', 'mzt', 'J1', '甲'), R('mgf', 'mzt', 'G4', '甲')], { 甲: { src: 'mgf' } });
+    t.sv.call('syncClock', { atoken: at });
+    eq('改掛優先 aka 那筆', [t.by('S-2').src, t.by('S-1').src], ['mgf:G4', 'gf:X9']); }
+}
+
 console.log(`primary.test：${pass} 通過、${fail} 失敗`);
 if (fail) process.exit(1);

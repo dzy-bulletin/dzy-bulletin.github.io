@@ -297,23 +297,25 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify) {
       got.rows.forEach(function (r) {
         var key = r.src + ':' + r.empId, name = String(r.name || '').trim();
         if (!r.empId || !name || L.STAFF_UNIT_IDS.indexOf(r.unit) < 0) return;
-        if (r.active) liveKeys[key] = 1;
+        if (r.active || r.hold || r.dupOf) liveKeys[key] = 1;              // hold（待判定）與同一人的別店列，不列進「打卡已離職」
         if (!r.active) return;
-        // 跨店重複（L.resolveClockRows 標的）：hold＝待 Eason 判定主店、dupOf＝不是主店那列，都不新增
+        // 跨店同名（L.resolveClockRows 標的）：hold＝待 Eason 判定、dupOf＝不是主店那列，都不新增
         if (r.hold || r.dupOf) return;
-        var had = all.filter(function (s) { return s.src === key; })[0], changed = false;
-        // 主店已判定：佈告欄裡用別家店來源建的同一人，改掛到主店（不重複新增）
-        if (!had && r.decided && r.aka && r.aka.length) {
-          had = all.filter(function (s) { return s.active && r.aka.indexOf(s.src) >= 0; })[0];
-          if (had) { had.src = key; changed = true; }
+        var had = all.filter(function (s) { return s.src === key; })[0], migrated = false;
+        if (!had && r.decided) {
+          // 主店已判定：佈告欄裡同名、從打卡同步來的那位就是同一人（判定的意思就是同名＝同一人），改掛到主店，不重複新增。
+          // 用名字找（不只 aka）：舊店那份這輪沒讀到、或判定前已在舊店離職，aka 都會少那一筆
+          var cands = all.filter(function (s) { return s.src && s.name === name; });
+          var act = cands.filter(function (s) { return s.active; });
+          act.sort(function (x, y) { return ((r.aka || []).indexOf(y.src) >= 0) - ((r.aka || []).indexOf(x.src) >= 0); });   // 優先掛 aka 裡那筆
+          if (act.length) { had = act[0]; had.src = key; migrated = true; }
+          else if (cands.length) return;                                    // 佈告欄已手動刪除這人：視為刻意刪除，不加回
         }
         if (had && r.decided && had.active) {
-          if (had.unit !== r.unit || String(had.store || '') !== String(r.store || '')) {
-            var where = function (u, st) { return (L.STAFF_UNIT_NAME[u] || u) + (st ? st : ''); };
-            moved.push(name + '（' + where(had.unit, had.store) + '→' + where(r.unit, r.store) + '）');
-            had.unit = r.unit; had.store = r.store || ''; changed = true;
-          }
-          if (changed) store.saveStaff(had);
+          var where = function (u, st) { return (L.STAFF_UNIT_NAME[u] || u) + (st ? st : ''); }, was = where(had.unit, had.store);
+          var unit = migrated || r.forceUnit ? r.unit : had.unit, st = migrated || r.forceStore ? (r.store || '') : String(had.store || '');
+          if (unit !== had.unit || st !== String(had.store || '')) { had.unit = unit; had.store = st; moved.push(name + '（' + was + '→' + where(unit, st) + '）'); migrated = true; }
+          if (migrated) store.saveStaff(had);
           return;
         }
         if (had) { if (r.store && !had.store && had.active) { had.store = r.store; store.saveStaff(had); } return; }   // 已同步過（含被手動刪除的，不再加回）；補上門市

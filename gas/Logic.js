@@ -111,10 +111,14 @@ var DZYB = (function () {
     var rows = (got && got.rows) || [], srcs = (got && got.sources) || [], want = {}, has = {};
     // 某來源的列完全沒有 lineHash 欄位（橋接退回舊版、名冊少了 line_user_id 欄）＝不知道綁定狀態，那店整店不動，
     // 否則會被當成全員解除綁定、全部 pinVer+1 被登出（2026-10-09 上線前補）
+    var held = {}, dup = {};
     rows.forEach(function (r) { if (r && Object.prototype.hasOwnProperty.call(r, 'lineHash')) has[r.src] = 1; });
     rows.forEach(function (r) {
       if (!r || !r.empId) return;
       var k = r.src + ':' + r.empId, h = String(r.lineHash || '');
+      if (r.hold) { held[k] = 1; return; }                             // 跨店同名待判定：這人的綁定這輪不動（resolveClockRows）
+      if (r.dupOf) { dup[k] = 1; want[k] = /^[0-9a-f]{64}$/.test(h) ? h : ''; return; }   // 同一人的非主店列：帶主店合併後的值，不看在職
+      if (dup[k]) return;
       h = r.active && /^[0-9a-f]{64}$/.test(h) ? h : '';
       if (!(k in want) || h) want[k] = h;                              // 同一工號重複出現：在職且有綁定的那列優先
     });
@@ -122,7 +126,7 @@ var DZYB = (function () {
     (staff || []).forEach(function (s) {
       if (!s || !s.src) return;
       var src0 = String(s.src).split(':')[0];
-      if (srcs.indexOf(src0) < 0 || !has[src0]) return;
+      if (srcs.indexOf(src0) < 0 || !has[src0] || held[s.src]) return;
       var h = want[s.src] || '';
       var old = s.lineHash || '';
       if (old !== h) out.push({ id: s.id, lineHash: h, bump: !!old });
@@ -132,43 +136,55 @@ var DZYB = (function () {
 
   // 打卡名單跨店重複（2026-10-10 Eason：各店名單以該店打卡試算表為準；同名出現在兩家以上，由 Eason 判定主店）。
   // primary＝{ 姓名: { src, unit?, store? } }（只放在 gas/Config.local.js，不進 git）；labels＝{ src: 店名 }。
-  // 規則：只看在職列。同名在職列分屬 ≥2 個來源 → 有判定：主店那列加 decided／aka（其他店的 src:empId），其他列標 dupOf（不新增）；
-  //       沒判定（或判定的店沒有這人）→ 全部標 hold（不新增），messages 列出請 Eason 判定。單一來源但有判定（例：改歸總部）→ 套用 unit／store。
-  // 同一人各列的 lineHash 合併成一個（主店那列優先），每一列都帶同一個值——同步 LINE 綁定時用舊店 src 的同仁才不會被誤判解綁而登出。
-  // 不刪任何列：在職判斷、「打卡已離職」清單都照舊。
+  // 標記（不刪任何列、不改傳入的列）：
+  //   hold   ＝這個人這輪不動：不新增、LINE 綁定不刷新（lineHashUpdates 跳過）。用於：沒判定的跨店同名、判定的主店沒這人或沒讀到、
+  //            主店有兩位在職同名（分不出是誰）、主店已離職但別店仍在職（要 Eason 重新判定）。
+  //   decided＋aka（主店那列）／dupOf（同名其他列，含已離職的）：只有主店那列會成為佈告欄同仁；
+  //            同一人各列的 lineHash 合併成一個（主店優先），dupOf 列不論在職與否都帶這個值，改掛前的舊同仁不會被誤清而登出。
+  //   forceUnit／forceStore：判定有明寫 unit／store 才每次套用；只寫 src 的人不覆蓋主管手動改的門市。
   function resolveClockRows(rows, primary, labels) {
     primary = primary || {}; labels = labels || {};
     var out = (rows || []).map(function (r) { return Object.assign({}, r); });
     var byName = {}, messages = [];
     out.forEach(function (r) {
-      if (!r || !r.active || !r.empId) return;
+      if (!r || !r.empId) return;
       var n = String(r.name || '').trim(); if (!n) return;
       (byName[n] = byName[n] || []).push(r);
     });
     var key = function (r) { return r.src + ':' + r.empId; };
     var lab = function (r) { return (labels[r.src] || r.src) + '（' + r.empId + '）'; };
+    var hash = function (r) { return r && /^[0-9a-f]{64}$/.test(String(r.lineHash || '')) ? r.lineHash : ''; };
+    var hold = function (list, msg) { list.forEach(function (r) { r.hold = true; }); if (msg) messages.push(msg); };
     Object.keys(byName).forEach(function (n) {
-      var list = byName[n], p = primary[n], srcs = {};
-      list.forEach(function (r) { srcs[r.src] = 1; });
-      var multi = Object.keys(srcs).length > 1;
-      if (!multi && !p) return;
-      var main = p && p.src ? list.filter(function (r) { return r.src === p.src; })[0] : (!multi ? list[0] : null);
-      var h = '';
-      [main].concat(list).forEach(function (r) { if (!h && r && /^[0-9a-f]{64}$/.test(String(r.lineHash || ''))) h = r.lineHash; });
-      if (!main) {
-        list.forEach(function (r) { r.hold = true; });
-        messages.push(p ? '「' + n + '」的主店（' + (labels[p.src] || p.src) + '）名單裡沒有這個人或這次沒讀到，暫不同步'
-          : '「' + n + '」同時在 ' + list.map(lab).join('、') + '，請 Eason 判定以哪家店為主（判定前不同步這個人）');
+      var list = byName[n], p = primary[n];
+      var act = list.filter(function (r) { return r.active; }), srcs = {};
+      act.forEach(function (r) { srcs[r.src] = 1; });
+      if (!p) {
+        if (Object.keys(srcs).length > 1) hold(list, '「' + n + '」同時在 ' + act.map(lab).join('、') + '，請 Eason 判定以哪家店為主（判定前不同步這個人）');
         return;
       }
-      if (p && p.unit && STAFF_UNIT_IDS.indexOf(p.unit) >= 0) main.unit = p.unit;
-      if (p && p.store !== undefined) main.store = p.store;
-      main.decided = !!p;
-      main.aka = list.filter(function (r) { return r !== main; }).map(key);
-      list.forEach(function (r) {
-        if (Object.prototype.hasOwnProperty.call(r, 'lineHash')) r.lineHash = h;
-        if (r !== main) r.dupOf = key(main);
-      });
+      if (!p.src) { hold(list, '「' + n + '」的主店判定缺少 src，暫不同步'); return; }
+      var mains = list.filter(function (r) { return r.src === p.src; }), mainAct = mains.filter(function (r) { return r.active; });
+      if (!mains.length) { hold(list, act.length ? '「' + n + '」的主店（' + (labels[p.src] || p.src) + '）名單裡沒有這個人或這次沒讀到，暫不同步' : ''); return; }
+      if (mainAct.length > 1) { hold(list, '「' + n + '」在主店（' + (labels[p.src] || p.src) + '）有 ' + mainAct.length + ' 位在職同名，分不出是哪一位，暫不同步'); return; }
+      var main = mainAct[0] || mains[0];
+      var others = list.filter(function (r) { return r !== main; });
+      if (!main.active) {
+        var still = others.filter(function (r) { return r.active; });
+        if (still.length) hold(list, '「' + n + '」在主店（' + (labels[p.src] || p.src) + '）已離職，但 ' + still.map(lab).join('、') + ' 仍在職，請 Eason 重新判定主店（暫不同步）');
+        return;                                                              // 各店都離職：照一般離職流程
+      }
+      if (p.unit && STAFF_UNIT_IDS.indexOf(p.unit) >= 0) main.unit = p.unit;
+      if (p.store !== undefined) main.store = p.store;
+      main.decided = true; main.forceUnit = !!(p.unit && STAFF_UNIT_IDS.indexOf(p.unit) >= 0); main.forceStore = p.store !== undefined;
+      main.aka = others.map(key);
+      var h = hash(main);
+      others.forEach(function (r) { if (!h && r.active) h = hash(r); });
+      [main].concat(others).forEach(function (r) { if (Object.prototype.hasOwnProperty.call(r, 'lineHash')) r.lineHash = h; });
+      others.forEach(function (r) { r.dupOf = key(main); });
+    });
+    Object.keys(primary).forEach(function (n) {
+      if (!byName[n]) messages.push('主店判定表裡的「' + n + '」在讀到的名冊裡都找不到（名字打錯、已移除，或那家店這次沒讀到）');
     });
     return { rows: out, messages: messages };
   }
