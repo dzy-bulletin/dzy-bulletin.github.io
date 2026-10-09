@@ -44,9 +44,10 @@ const H1 = A.lineHash('U1'), H2 = A.lineHash('U2');
     { src: 'gf', empId: 'A1', active: true, lineHash: H1 }, { src: 'gf', empId: 'A2', active: false, lineHash: H2 },
     { src: 'gf', empId: 'A6', active: true, lineHash: 'not-a-hash' }] };
   eq('lineHashUpdates：在職→填、離職→清、名單裡找不到→清、格式錯→清；讀取失敗的來源（cf）與沒有來源的不動',
-    L.lineHashUpdates(staff, got), [{ id: 'S-1', lineHash: H1 }, { id: 'S-2', lineHash: '' }, { id: 'S-5', lineHash: '' }, { id: 'S-6', lineHash: '' }]);
+    L.lineHashUpdates(staff, got), [{ id: 'S-1', lineHash: H1, bump: false }, { id: 'S-2', lineHash: '', bump: true }, { id: 'S-5', lineHash: '', bump: true }, { id: 'S-6', lineHash: '', bump: true }]);
   eq('lineHashUpdates：同一工號重複，在職有綁定的優先', L.lineHashUpdates([{ id: 'S-1', src: 'gf:A1', lineHash: '' }],
-    { sources: ['gf'], rows: [{ src: 'gf', empId: 'A1', active: true, lineHash: H1 }, { src: 'gf', empId: 'A1', active: false, lineHash: '' }] }), [{ id: 'S-1', lineHash: H1 }]);
+    { sources: ['gf'], rows: [{ src: 'gf', empId: 'A1', active: true, lineHash: H1 }, { src: 'gf', empId: 'A1', active: false, lineHash: '' }] }), [{ id: 'S-1', lineHash: H1, bump: false }]);
+  eq('lineHashUpdates：改綁別的 LINE→bump', L.lineHashUpdates([{ id: 'S-1', src: 'gf:A1', lineHash: H1 }], { sources: ['gf'], rows: [{ src: 'gf', empId: 'A1', active: true, lineHash: H2 }] }), [{ id: 'S-1', lineHash: H2, bump: true }]);
   eq('lineHashUpdates：沒變就不列', L.lineHashUpdates([{ id: 'S-1', src: 'gf:A1', lineHash: H1 }], { sources: ['gf'], rows: [{ src: 'gf', empId: 'A1', active: true, lineHash: H1 }] }), []);
 }
 
@@ -62,16 +63,28 @@ function memStore(staff) {
 const S0 = (id, name, unit, extra) => Object.assign({ id, name, unit, pinHash: '', salt: '', pinVer: 0, fail: 0, active: true, createdAt: '', deletedAt: '', src: '', store: '', lineHash: '' }, extra || {});
 const clock = { nowMs: () => Date.now(), today: () => '2026-10-09' };
 const verifyTEST = { verify: (t) => { const m = /^TEST:(.+)$/.exec(t); return m ? m[1] : null; } };
-{ const st = memStore([S0('S-001', '測試一', 'mala', { src: 'gf:A1' }), S0('S-002', '測試二', 'mala', { src: 'gf:A2', lineHash: H2 }), S0('S-003', '測試三', 'cf'),
-    S0('S-004', '測試四', 'mzt', { pinHash: A.hashPin('x', '2580'), salt: 'x', pinVer: 2, fail: 3 })]);
+{ const H3 = A.lineHash('U3');
+  const st = memStore([S0('S-001', '測試一', 'mala', { src: 'gf:A1' }), S0('S-002', '測試二', 'mala', { src: 'gf:A2', lineHash: H2, pinHash: A.hashPin('y', '1357'), salt: 'y', pinVer: 1 }), S0('S-003', '測試三', 'cf'),
+    S0('S-004', '測試四', 'mzt', { pinHash: A.hashPin('x', '2580'), salt: 'x', pinVer: 2, fail: 3 }),
+    S0('S-005', '測試五', 'mala', { src: 'gf:A5', lineHash: H3, pinVer: 4 }), S0('S-006', '測試六', 'mzt', { src: 'js:J6', lineHash: H3, pinVer: 7 })]);
   const rows = [{ src: 'gf', unit: 'mala', empId: 'A1', name: '測試一', active: true, lineHash: H1 }, { src: 'gf', unit: 'mala', empId: 'A2', name: '測試二', active: false, lineHash: H2 },
-    { src: 'gf', unit: 'mala', empId: 'A9', name: '測試九', active: true, lineHash: '' }, { src: 'cf', unit: 'cf', empId: 'C3', name: '測試三', active: true, lineHash: H2 }];
-  const src = { read: () => ({ rows, errors: [], sources: ['gf', 'cf'], counts: {} }) };
+    { src: 'gf', unit: 'mala', empId: 'A9', name: '測試九', active: true, lineHash: '' }, { src: 'cf', unit: 'cf', empId: 'C3', name: '測試三', active: true, lineHash: H2 },
+    { src: 'gf', unit: 'mala', empId: 'A5', name: '測試五', active: true, lineHash: A.lineHash('U5') }];
+  const src = { read: () => ({ rows, errors: ['墨竹亭金山：讀取失敗'], sources: ['gf', 'cf'], counts: {} }) };   // js 讀取失敗
   const sv = makeService_(L, st, { quota: () => null }, A, clock, src, verifyTEST);
   const at = A.makeAdminToken('SECRET', 1, Date.now() + 60e3);
-  const r = sv.call('syncClock', { atoken: at });
   const by = (id) => st.d.staff.find((s) => s.id === id);
+  const tok2 = sv.call('lineLogin', { idToken: 'TEST:U2' }).data.token, tok5 = sv.call('lineLogin', { idToken: 'TEST:U3' });
+  eq('同步前：S-002 用 LINE 登入的憑證有效；U3 對到 S-005 與 S-006 兩人', [sv.call('board', { token: tok2 }).ok, tok5.data.choices.map((c) => c.id)], [true, ['S-005', 'S-006']]);
+  const tok6 = sv.call('lineLogin', { idToken: 'TEST:U3', staffId: 'S-006' }).data.token;
+  const r = sv.call('syncClock', { atoken: at });
   eq('syncClock ok', r.ok, true);
+  // #32-2：解綁或改綁 → pinVer+1（舊憑證失效、密碼不變）；'' → 值不動；讀取失敗的來源不動
+  eq('syncClock pinVer：沒綁→綁上不變、解綁+1、改綁+1、讀取失敗那店不變', [by('S-001').pinVer, by('S-002').pinVer, by('S-005').pinVer, by('S-006').pinVer], [0, 2, 5, 7]);
+  eq('syncClock：解綁後用舊 LINE 登入的手機被踢出', sv.call('board', { token: tok2 }).code, 'AUTH');
+  eq('syncClock：讀取失敗那店的人憑證仍有效、lineHash 不變', [sv.call('board', { token: tok6 }).ok, by('S-006').lineHash], [true, H3]);
+  eq('syncClock：解綁不動密碼，密碼照樣能登入', sv.call('login', { staffId: 'S-002', pin: '1357' }).ok, true);
+  eq('syncClock：改綁後新的 LINE 對到、舊的對不到', [sv.call('lineLogin', { idToken: 'TEST:U5' }).data.me.id, sv.call('lineLogin', { idToken: 'TEST:U3' }).data.me.id], ['S-005', 'S-006']);
   eq('syncClock：在職且綁定→lineHash；離職→清空；新加入沒綁→空；手動建的同名同仁被對應後也填上', [by('S-001').lineHash, by('S-002').lineHash, st.d.staff.find((s) => s.name === '測試九').lineHash, by('S-003').lineHash], [H1, '', '', H2]);
   const saves = st.d.saves; sv.call('syncClock', { atoken: at });
   eq('syncClock：第二次沒有變化就不寫', st.d.saves, saves);
@@ -128,11 +141,12 @@ const verifyTEST = { verify: (t) => { const m = /^TEST:(.+)$/.exec(t); return m 
   const sh = book.getSheetByName('同仁');
   sh.data = [['id', '姓名', '單位', '密碼雜湊', 'salt', '密碼版本', '連續錯誤次數', '在職', '建立時間', '刪除時間', '來源（打卡系統）', '門市'],
     ['S-001', '測試一', 'mala', '', '', '0', '0', 'TRUE', '', '', 'gf:A1', '']];
+  sh.maxCols = 12;                                          // #32-7：分頁只有 12 欄（讀第 13 欄會越界）
   fg.bumpGen();
   const s1 = fg.store().getStaff()[0];
   eq('GAS 舊同仁表（沒有 lineHash 欄）讀出 lineHash=""', [s1.id, s1.lineHash], ['S-001', '']);
   s1.lineHash = want; const st2 = fg.store(); st2.saveStaff(s1);
-  eq('GAS 寫入後補上表頭、值在第 13 欄', [sh.data[0][12], sh.data[1][12]], ['LINE 綁定（雜湊）', want]);
+  eq('GAS 寫入後加欄、補上表頭、值在第 13 欄', [sh.maxCols, sh.data[0][12], sh.data[1][12]], [13, 'LINE 綁定（雜湊）', want]);
   fg.bumpGen();
   eq('GAS 讀回 lineHash', fg.store().getStaff()[0].lineHash, want);
   const mr = vm.runInContext('mirrorRows_', G)({ posts: [], staff: [{ id: 'S-001', name: '測試一', active: true, lineHash: want }], reads: [], log: [] }, (p) => p, {});
@@ -180,8 +194,9 @@ function bridgeWith(clockData, failClock) {
   eq('每小時：鏡像 ok，有讀打卡名單', [r.ok, B.calls.includes('clock'), r.line && r.line.ok, r.line && r.line.updated], [true, true, true, 2]);
   eq('每小時：S-001 填上、S-002 離職清空、S-003（央廚讀取失敗）不動', after.map((s) => s.lineHash), [H1, '', H1]);
   eq('每小時：不新增同仁（打卡新人不會被加進來）', after.length, 3);
-  const strip = (s) => { const o = Object.assign({}, s); delete o.lineHash; return o; };
-  eq('每小時：除了 lineHash 其他欄位一個都沒變', after.map(strip), before.map(strip));
+  const strip = (s) => { const o = Object.assign({}, s); delete o.lineHash; delete o.pinVer; return o; };
+  eq('每小時：除了 lineHash／pinVer 其他欄位一個都沒變', after.map(strip), before.map(strip));
+  eq('每小時 pinVer：沒綁→綁上不變（3）、解綁 +1（0→1）、讀取失敗那店不變（0）', after.map((s) => s.pinVer), [3, 1, 0]);
   eq('鏡像：送出的同仁沒有 lineHash', B.mirrored.staff.some((s) => 'lineHash' in s), false);
   const B2 = bridgeWith(clockData, true);
   const r2 = await quiet(() => runMirror({ dir, bridge: B2 }));
@@ -219,28 +234,33 @@ function bridgeWith(clockData, failClock) {
   // ---------- 7. 伺服器（E2E 假橋接）：lineLogin 端到端、限流 BUSY ----------
   const port = await new Promise((ok) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => ok(p)); }); });
   const sdir = tmp('dzyb-line-srv-');
-  const env = Object.assign({}, process.env, { DZYB_NO_DOTENV: '1', E2E: '1', PORT: String(port), DATA_DIR: sdir, LINE_LOGIN_PER_MIN: '4', HOME: tmp('dzyb-line-home-') });
+  const env = Object.assign({}, process.env, { DZYB_NO_DOTENV: '1', E2E: '1', PORT: String(port), DATA_DIR: sdir, LINE_LOGIN_PER_MIN: '3', LINE_LOGIN_GLOBAL_PER_MIN: '5', HOME: tmp('dzyb-line-home-') });
   ['BRIDGE_URL', 'BRIDGE_KEY', 'ALLOW_ORIGIN'].forEach((k) => delete env[k]);
   const p = spawn(process.execPath, [path.join(__dirname, '..', 'server/index.js')], { env, stdio: ['ignore', 'pipe', 'pipe'] });
   procs.push(p);
   let out = ''; p.stdout.on('data', (c) => { out += c; }); p.stderr.on('data', () => {});
   await new Promise((ok, no) => { const t = setInterval(() => { if (/啟動/.test(out)) { clearInterval(t); ok(); } }, 20); p.on('exit', (c) => { clearInterval(t); no(new Error('伺服器沒起來 ' + c)); }); });
-  const post = (pth, body) => new Promise((ok) => {
+  const post = (pth, body, ip) => new Promise((ok) => {
     const buf = Buffer.from(JSON.stringify(body));
-    const rq = http.request({ host: '127.0.0.1', port, method: 'POST', path: pth, headers: { 'Content-Type': 'text/plain', 'Content-Length': buf.length }, agent: false }, (res) => {
+    const rq = http.request({ host: '127.0.0.1', port, method: 'POST', path: pth, agent: false,
+      headers: Object.assign({ 'Content-Type': 'text/plain', 'Content-Length': buf.length }, ip ? { 'X-Forwarded-For': ip + ', 100.64.0.1' } : {}) }, (res) => {
       const cs = []; res.on('data', (c) => cs.push(c)); res.on('end', () => ok(JSON.parse(Buffer.concat(cs).toString())));
     });
     rq.end(buf);
   });
   await post('/__seed', { staff: [{ id: 'S-001', name: '測試一', unit: 'mala', pin: null, lineUid: 'U-s1' }, { id: 'S-002', name: '測試二', unit: 'cf', pin: '2580', lineUid: 'U-s2' }],
     posts: [{ id: 'P-1', title: '公告', units: ['mala', 'mzt', 'cf'], publishOn: '2026-01-01' }], reads: [], adminPass: 'adminpass88', clock: [] });
-  const s1 = await post('/', { action: 'lineLogin', idToken: 'TEST:U-s1' });
-  eq('伺服器 lineLogin：沒設密碼的同仁用 LINE 登入', [s1.ok, s1.data && s1.data.me.id], [true, 'S-001']);
+  const IA = '203.0.113.1', IB = '203.0.113.2';
+  for (let k = 0; k < 6; k++) await post('/', { action: 'lineLogin', idToken: '' }, IA);
+  const s1 = await post('/', { action: 'lineLogin', idToken: 'TEST:U-s1' }, IA);
+  eq('伺服器 lineLogin：空白 idToken 不算進限流（6 次 BAD_REQ 後仍能登入）；沒設密碼的同仁用 LINE 登入', [s1.ok, s1.data && s1.data.me.id], [true, 'S-001']);
   eq('伺服器 lineLogin：憑證可讀 board', (await post('/', { action: 'board', token: s1.data.token })).data.me.id, 'S-001');
-  eq('伺服器 lineLogin：對不到→LINE_NOT_LINKED', (await post('/', { action: 'lineLogin', idToken: 'TEST:U-x' })).code, 'LINE_NOT_LINKED');
-  eq('伺服器 lineLogin：非 TEST 憑證（E2E 不連 LINE）→LINE_BAD', (await post('/', { action: 'lineLogin', idToken: 'eyJ.x.y' })).code, 'LINE_BAD');
-  eq('伺服器 lineLogin：有密碼的同仁也可以', (await post('/', { action: 'lineLogin', idToken: 'TEST:U-s2' })).data.me.id, 'S-002');
-  eq('伺服器 lineLogin：每分鐘超過 4 次→BUSY', (await post('/', { action: 'lineLogin', idToken: 'TEST:U-s2' })).code, 'BUSY');
+  eq('伺服器 lineLogin：對不到→LINE_NOT_LINKED', (await post('/', { action: 'lineLogin', idToken: 'TEST:U-x' }, IA)).code, 'LINE_NOT_LINKED');
+  eq('伺服器 lineLogin：非 TEST 憑證（E2E 不連 LINE）→LINE_BAD', (await post('/', { action: 'lineLogin', idToken: 'eyJ.x.y' }, IA)).code, 'LINE_BAD');
+  eq('伺服器 限流：同一 IP 每分鐘第 4 次→BUSY', (await post('/', { action: 'lineLogin', idToken: 'TEST:U-s2' }, IA)).code, 'BUSY');
+  eq('伺服器 限流：別的 IP 不受影響；有密碼的同仁也可以', (await post('/', { action: 'lineLogin', idToken: 'TEST:U-s2' }, IB)).data.me.id, 'S-002');
+  eq('伺服器 限流：全體第 5 次仍可', (await post('/', { action: 'lineLogin', idToken: 'TEST:U-s2' }, IB)).ok, true);
+  eq('伺服器 限流：全體超過 5 次→BUSY（換 IP 也一樣）', [(await post('/', { action: 'lineLogin', idToken: 'TEST:U-s2' }, IB)).code, (await post('/', { action: 'lineLogin', idToken: 'TEST:U-s2' }, '203.0.113.9')).code], ['BUSY', 'BUSY']);
   eq('伺服器 roster 不含 lineHash', JSON.stringify((await post('/', { action: 'roster' })).data).includes('lineHash'), false);
   eq('伺服器 紀錄不含 idToken／sub', /TEST:U-s1|U-s1/.test(out), false);
 })().catch((e) => { fail++; console.log('✗ 例外', e && e.stack || e); }).finally(() => {

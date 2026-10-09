@@ -112,6 +112,9 @@ Apps Script Web App（madesiaosinla，以擁有者身分執行、任何人可呼
 - 後端向 LINE 驗證 ID token（`POST https://api.line.me/oauth2/v2.1/verify`，`aud` 必須是本頻道、`exp` 未過期），拿到的 `sub` 算成 `lineHash` 比對在職同仁。
 - **LINE 登入不看也不動密碼與連錯次數**：沒設密碼、密碼被鎖住的人都能用 LINE 登入（鎖定保護的是 4 位數密碼被猜；LINE ID token 是另一個獨立證明）。發的憑證與密碼登入同一種，重設密碼（pinVer +1）一樣讓它失效。因此同仁憑證的驗證不再要求「已設密碼」。
 - 綁定來源：主管按「打卡同步」時更新；Mac mini 每小時鏡像工作（`server/mirror.js` 第 4 步）也會只刷新 `lineHash`（不新增、不刪除同仁）。打卡離職或解除綁定 → 清空。
+- 解綁／改綁（`lineHash` 由有值變成空白或別的值）時 `pinVer` +1，讓已發出的憑證全部失效（密碼不變）；空白 → 有值不動（審查 #32-2）。
+- 前端防呆（#32-1、#32-3）：重新登入 LINE（`liff.login`、或在 LINE app 內 `liff.logout`＋重新載入）同一分頁只試一次（sessionStorage `dzyb_lineRetry`），任何步驟失敗或 20 秒沒完成都退回首頁。
+- Mac mini 限流（#32-5）：只計真的要打 LINE verify 的請求；每個來源 IP（`X-Forwarded-For` 第一段，沒有就用連線位址）每分鐘 10 次，全體每分鐘 120 次，超過回 `BUSY`。
 
 ### 密碼防猜
 - 4 位數只有 1 萬種組合，所以錯誤次數全部**由後端判斷**，前端顯示的次數只是提示。
@@ -145,7 +148,7 @@ Apps Script Web App（madesiaosinla，以擁有者身分執行、任何人可呼
 | `roster` | — | — | `[{id, name(遮罩), unit, store, hasPin, locked}]`（只列在職；Code.js 以 CacheService 快取結果 10 分鐘，世代換了即失效） |
 | `setPin` | — | `staffId, pin` | `{token, me, board}`（board 同 `board` 回傳，登入少一次往返） |
 | `login` | — | `staffId, pin` | `{token, me, board}`；錯誤時 code＝`BAD_PIN`（附剩餘次數）／`LOCKED`（需主管重設） |
-| `lineLogin` | — | `idToken`（LIFF 的 LINE ID token）, `staffId?`（對到多人時本人選的那位） | 對到一人：`{token, me, board}`（同 `login`）；多人且沒帶 staffId：`{choices:[{id, name(遮罩), unit}]}`；錯誤 code＝`LINE_NOT_LINKED`（對不到在職同仁，或 staffId 不在對到的人裡）／`LINE_BAD`（LINE 驗證失敗）／`LINE_DOWN`（連不上 LINE）／`BUSY`（Mac mini 每分鐘超過 30 次）。寫入類動作（上鎖），但不寫任何資料；不記錄 idToken 與 LINE userId |
+| `lineLogin` | — | `idToken`（LIFF 的 LINE ID token）, `staffId?`（對到多人時本人選的那位） | 對到一人：`{token, me, board}`（同 `login`）；多人且沒帶 staffId：`{choices:[{id, name(遮罩), unit}]}`；錯誤 code＝`LINE_NOT_LINKED`（對不到在職同仁，或 staffId 不在對到的人裡）／`LINE_BAD`（LINE 驗證失敗）／`LINE_DOWN`（連不上 LINE）／`BUSY`（Mac mini 限流：每 IP 每分鐘 10 次、全體 120 次）。寫入類動作（上鎖），但不寫任何資料；不記錄 idToken 與 LINE userId |
 | `board` | 同仁憑證 | — | `{today, me, posts:[上架中，三個單位全部], myReads:{postId: 簽名時間}}` |
 | `history` | 同仁憑證 | — | `{today, posts:[已下架], myReads:{postId: 簽名時間}}` |
 | `ack` | 同仁憑證 | `postId, sig` | `{at}`；已經簽過回 code＝`ALREADY` |

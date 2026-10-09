@@ -19,7 +19,7 @@
  *      /health：files.stale（待補超過 24 小時）> 0 → 黃；pending > 0 但 stale = 0 是正常排隊，不轉燈。
  *
  *   4. LINE 綁定刷新（2026-10-09，LINE 自動登入）：經橋接 `clock` 讀打卡名單（只有 lineHash，沒有 LINE userId），
- *      在一筆寫入交易裡只更新同仁的 lineHash（規則 js/logic.js lineHashUpdates，與 Service.syncClock 共用）——
+ *      在一筆寫入交易裡只更新同仁的 lineHash（規則 js/logic.js lineHashUpdates，與 Service.syncClock 共用；原本有綁定、現在清空或換值時 pinVer 也 +1）——
  *      不新增、不刪除同仁，不需要管理通行碼。讀不到（橋接失敗）就記一行紀錄、跳過，不影響 ok／fails；結果在 mirror-last.json 的 line。
  *      --all／--files* 不做。鏡像（第 2 步）送出的同仁一律拿掉 lineHash，試算表不存這一欄的值。
  *
@@ -466,7 +466,9 @@ async function refreshLineHash(o) {
     try {
       const staff = J.rows(db, 'SELECT json FROM staff ORDER BY rowid').map((r) => JSON.parse(r.json));
       const ups = L.lineHashUpdates(staff, got), upd = db.prepare('UPDATE staff SET json = ? WHERE id = ?');
-      ups.forEach((u) => { const s = staff.find((x) => x.id === u.id); s.lineHash = u.lineHash; upd.run(JSON.stringify(s), s.id); });
+      ups.forEach((u) => {                                   // 解綁／改綁（bump）：pinVer+1，用舊 LINE 登入的手機憑證失效（#32-2；密碼不變）
+        const s = staff.find((x) => x.id === u.id); s.lineHash = u.lineHash; if (u.bump) s.pinVer = (Number(s.pinVer) || 0) + 1; upd.run(JSON.stringify(s), s.id);
+      });
       db.exec('COMMIT');
       return { ok: true, updated: ups.length, linked: staff.filter((s) => s.active && s.lineHash).length, sourceErrors: Array.isArray(got.errors) ? got.errors.length : 0 };
     } catch (e) { try { db.exec('ROLLBACK'); } catch (y) {} throw e; }

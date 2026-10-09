@@ -11,7 +11,7 @@
  *   E2E=1（只在測試時開：/__seed、/__clock 等測試入口，改用假橋接）；E2E 必須明確指定非預設的 DATA_DIR，且不得設 BRIDGE_URL／BRIDGE_KEY
  *   BRIDGE_FAKE_DELAY_MS（E2E 假橋接每個動作延遲，阻塞測試用）；BRIDGE_FAKE_FAIL=1（E2E 假橋接一律失敗並回 AUTH，驗錯誤碼對應用）
  *   LINE_CHANNEL_ID=2011292256（選用；LINE 自動登入驗 ID token 用的 LINE Login 頻道 ID，預設就是鼎兆元打卡那個）
- *   LINE_LOGIN_PER_MIN=30（選用；每分鐘最多幾次 lineLogin，超過回 BUSY——每次都會打 LINE 的 verify API）
+ *   LINE_LOGIN_PER_MIN=10、LINE_LOGIN_GLOBAL_PER_MIN=120（選用；lineLogin 真的要打 LINE verify 時才計數：每個來源 IP 每分鐘上限／全部加總每分鐘上限，超過回 BUSY）
  *
  * 不卡住事件迴圈（#6 審查發現 1）：Google 橋接一律 async，在 Service 之外 await。每個請求用自己的 files／clockSrc 墊片建 Service：
  * 墊片需要 Google 時丟出「待橋接」標記（Service 會先做完憑證與格式驗證才走到墊片，所以未授權的請求永遠不會打橋接），
@@ -65,7 +65,8 @@ function config(env) {
     BODY_IDLE_MS: Number(env.BODY_IDLE_MS) > 0 ? Number(env.BODY_IDLE_MS) : 30000,
     REQUEST_TIMEOUT_MS: (Number(env.REQUEST_TIMEOUT_S) > 0 ? Number(env.REQUEST_TIMEOUT_S) : 180) * 1000,
     LINE_CHANNEL_ID: env.LINE_CHANNEL_ID || '2011292256',
-    LINE_PER_MIN: Number(env.LINE_LOGIN_PER_MIN) > 0 ? Math.floor(Number(env.LINE_LOGIN_PER_MIN)) : 30,
+    LINE_PER_MIN: Number(env.LINE_LOGIN_PER_MIN) > 0 ? Math.floor(Number(env.LINE_LOGIN_PER_MIN)) : 10,
+    LINE_GLOBAL_PER_MIN: Number(env.LINE_LOGIN_GLOBAL_PER_MIN) > 0 ? Math.floor(Number(env.LINE_LOGIN_GLOBAL_PER_MIN)) : 120,
     LINE_VERIFY_URL: env.LINE_VERIFY_URL || 'https://api.line.me/oauth2/v2.1/verify'   // 只給測試指到本機假 LINE
   };
 }
@@ -154,7 +155,9 @@ function makeApp(cfg) {
       clockSrc: { read: () => pre.clock || want(pre, async () => { pre.clock = await bridge.clockSrc.read(); }) },
       // LINE ID token：第一輪丟待橋接、在交易外 await LINE 的 verify，第二輪拿結果（null＝驗證失敗）。
       // E2E 模式不連 LINE：只認 'TEST:<uid>'（與本機假資料相同）
+      // 限流只算「真的要去 LINE 驗證」的請求（Service 已擋掉空白／超長 idToken，#32-5）
       lineVerify: { verify: (tok) => (pre.line !== undefined ? pre.line : want(pre, async () => {
+        if (lineBusy(pre.ip)) { const be = new Error('登入的人太多，請稍後再試'); be.code = 'BUSY'; be.business = true; throw be; }
         if (E2E) { const m = /^TEST:(.{1,64})$/.exec(String(tok)); pre.line = m ? m[1] : null; return; }
         pre.line = await verifyLineToken(cfg.LINE_VERIFY_URL, cfg.LINE_CHANNEL_ID, String(tok), Date.now());
       })) }
@@ -167,18 +170,23 @@ function makeApp(cfg) {
   // 每一輪用 q 的深拷貝：Service 會改 q.post（例如把 d.id 換成 prev.id），重跑時要跟 GAS 一樣從原始請求算指紋（S4）。
   const MOVED = { ok: false, code: 'MOVED', message: '系統搬家中，請稍後重新整理' };
   const frozen = () => fs.existsSync(READONLY_FILE);
-  // lineLogin 簡單限流（每個程序、滑動 1 分鐘）：每次都要打 LINE 的 verify API，公開網址不能讓人無限轉送
-  const lineHits = [];
-  function lineBusy() {
-    const now = Date.now();
-    while (lineHits.length && now - lineHits[0] >= 60e3) lineHits.shift();
-    if (lineHits.length >= cfg.LINE_PER_MIN) return true;
-    lineHits.push(now); return false;
+  // lineLogin 限流（每個程序記憶體、滑動 1 分鐘；#32-5）：每次驗證都要打 LINE 的 verify API，公開網址不能讓人無限轉送。
+  // 以來源 IP 分桶（每 IP LINE_PER_MIN），另有全體加總上限（LINE_GLOBAL_PER_MIN）——有人狂送時只擋他自己，
+  // 偽造 X-Forwarded-For 換 IP 也只會撞到全體上限（全體被擋時同仁退回選名字＋密碼，功能仍在）。
+  const lineByIp = new Map(), lineAll = [];
+  const prune = (arr, now) => { while (arr.length && now - arr[0] >= 60e3) arr.shift(); };
+  function lineBusy(ip) {
+    const now = Date.now(), key = ip || '-';
+    prune(lineAll, now);
+    let mine = lineByIp.get(key) || [];
+    prune(mine, now);
+    if (lineByIp.size > 5000) for (const [k, v] of lineByIp) { prune(v, now); if (!v.length) lineByIp.delete(k); }   // 不讓 Map 無限長大
+    if (mine.length >= cfg.LINE_PER_MIN || lineAll.length >= cfg.LINE_GLOBAL_PER_MIN) return true;
+    mine.push(now); lineAll.push(now); lineByIp.set(key, mine); return false;
   }
-  async function run(action, q) {
+  async function run(action, q, ip) {
     if ((WRITE.has(action) || action === 'uploadFile') && frozen()) return { out: MOVED, revoke: [] };
-    if (action === 'lineLogin' && lineBusy()) return { out: { ok: false, code: 'BUSY', message: '登入的人太多，請稍後再試' }, revoke: [] };
-    const pre = { shared: new Set(), revoke: [], uploaded: null, clock: null, line: undefined, need: null };
+    const pre = { shared: new Set(), revoke: [], uploaded: null, clock: null, line: undefined, need: null, ip: ip || '' };
     for (let round = 0; round < 3; round++) {
       pre.need = null; pre.revoke = [];
       const sh = shims(pre);
@@ -250,6 +258,11 @@ function makeApp(cfg) {
     TOO_BIG: [413, { ok: false, code: 'TOO_BIG', message: '檔案太大' }],
     BUSY: [503, { ok: false, code: 'BUSY', message: '系統忙碌，請稍後再試' }]
   };
+  // 來源 IP（只給 lineLogin 限流分桶）：經 Tailscale Funnel 進來的連線 socket 都是本機，取 X-Forwarded-For 第一段；沒有就用 socket 位址
+  function clientIp(req) {
+    const xff = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+    return (xff || (req.socket && req.socket.remoteAddress) || '').slice(0, 64);
+  }
   function logLine(action, ms, out) {   // 每請求一行：時間 action 毫秒 ok/code（不記參數，供 #5 的伺服器端 p95）
     console.log(ts() + ' ' + (/^[A-Za-z]{1,32}$/.test(action) ? action : '-') + ' ' + ms + 'ms ' + (out.ok ? 'ok' : String(out.code)));
   }
@@ -342,7 +355,7 @@ function makeApp(cfg) {
       try { q = JSON.parse(raw); } catch (e) { const o = { ok: false, code: 'BAD_REQ', message: '格式錯誤' }; logLine('-', Date.now() - t0, o); return send(res, 400, o); }
       const action = String(q && q.action || '');
       let r;
-      try { r = await run(action, q); }
+      try { r = await run(action, q, clientIp(req)); }
       catch (e) { console.error(action + ': ' + (e && e.stack || e)); r = { out: { ok: false, code: 'SERVER', message: '系統忙碌，請稍後再試' }, revoke: [] }; }
       logLine(action, Date.now() - t0, r.out);
       send(res, 200, r.out);

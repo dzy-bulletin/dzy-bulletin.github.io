@@ -66,7 +66,7 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify) {
     var all = store.getStaff(), n = 0;
     L.lineHashUpdates(all, got).forEach(function (u) {
       var s = all.filter(function (x) { return x.id === u.id; })[0];
-      if (s) { s.lineHash = u.lineHash; store.saveStaff(s); n++; }
+      if (s) { s.lineHash = u.lineHash; if (u.bump) s.pinVer = (Number(s.pinVer) || 0) + 1; store.saveStaff(s); n++; }   // 解綁／改綁：pinVer+1 踢掉已登入的手機
     });
     return n;
   }

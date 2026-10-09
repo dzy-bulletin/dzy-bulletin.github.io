@@ -103,7 +103,9 @@ var DZYB = (function () {
   var LINE_HASH_PREFIX = 'dzyb-line:';
   // 打卡名單 → 同仁 lineHash 應有的值（syncClock 與 Mac mini 每小時工作共用這一段）。
   // 只看 src 有值、而且這次有讀到該來源（got.sources）的同仁：名單裡在職 → 該列的 lineHash；離職、沒綁 LINE、名單裡找不到 → ''。
-  // 讀取失敗的來源一律不動。回傳有變動的 [{id, lineHash}]；只動 lineHash，不新增、不刪除同仁。
+  // 讀取失敗的來源一律不動。回傳有變動的 [{id, lineHash, bump}]；只動 lineHash（與 bump 時的 pinVer），不新增、不刪除同仁。
+  // bump＝原本有綁定、現在清空或換成別的 LINE（#32-2）：呼叫端要把 pinVer +1，讓用舊 LINE 登入的手機憑證失效（密碼本身不變）。
+  // 從沒綁 → 綁上（'' → 值）不 bump。
   function lineHashUpdates(staff, got) {
     var rows = (got && got.rows) || [], srcs = (got && got.sources) || [], want = {};
     rows.forEach(function (r) {
@@ -117,7 +119,8 @@ var DZYB = (function () {
       if (!s || !s.src) return;
       if (srcs.indexOf(String(s.src).split(':')[0]) < 0) return;
       var h = want[s.src] || '';
-      if ((s.lineHash || '') !== h) out.push({ id: s.id, lineHash: h });
+      var old = s.lineHash || '';
+      if (old !== h) out.push({ id: s.id, lineHash: h, bump: !!old });
     });
     return out;
   }

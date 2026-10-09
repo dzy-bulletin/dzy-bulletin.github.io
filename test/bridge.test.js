@@ -21,6 +21,7 @@ function makeSheet(name, maxRows) {
   sh.setName = (n) => { if (failRename === n) { failRename = null; throw new Error('模擬換名失敗：' + n); } if (book && book.sheets.some((x) => x !== sh && x.name === n)) throw new Error('分頁名稱重複：' + n); sh.name = n; return sh; };   // 真的 Sheets 遇到重名會丟錯
   sh.getLastRow = () => sh.data.length;
   sh.getMaxRows = () => sh.max;
+  sh.maxCols = 26; sh.getMaxColumns = () => sh.maxCols; sh.insertColumnsAfter = (a, n) => { sh.maxCols += n; };   // #32-7：欄數防呆
   sh.insertRowsAfter = (after, n) => { sh.max += n; };
   sh.setFrozenRows = (n) => { sh.frozen = n; };
   sh.getRange = (r, c, nr = 1, nc = 1) => {

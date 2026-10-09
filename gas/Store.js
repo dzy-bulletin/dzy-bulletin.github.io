@@ -137,7 +137,8 @@ function makeStore_(files) {
     var ck = 'rows:' + key + ':' + gen, hit = fresh ? null : cacheGet_(ck);
     if (hit) { memo[key] = hit; return hit; }
     var sh = sheet(key), n = sh.getLastRow() - 1, cols = SHEETS_[key].cols;
-    var vals = n > 0 ? sh.getRange(2, 1, n, cols.length).getValues() : [];
+    var nc = Math.min(cols.length, sh.getMaxColumns());                // 舊分頁欄數比定義少（例如沒有 lineHash 欄）：只讀現有的，缺的當空白
+    var vals = n > 0 ? sh.getRange(2, 1, n, nc).getValues() : [];
     memo[key] = vals.map(function (r, i) {
       var o = { _row: i + 2 }; cols.forEach(function (c, j) { o[c] = cellStr_(r[j]); }); return o;
     });
@@ -146,6 +147,7 @@ function makeStore_(files) {
   }
   function write(key, obj, row) {
     var cols = SHEETS_[key].cols, sh = sheet(key);
+    if (sh.getMaxColumns() < cols.length) sh.insertColumnsAfter(sh.getMaxColumns(), cols.length - sh.getMaxColumns());   // 分頁欄數不夠先加欄（getRange 越界會丟例外）
     if (sh.getRange(1, cols.length).getValue() === '') {                 // 舊表補新欄表頭（例如同仁的「來源」欄）
       sh.getRange(1, 1, 1, cols.length).setValues([SHEETS_[key].head]).setFontWeight('bold');
       sh.getRange(1, cols.length, sh.getMaxRows(), 1).setNumberFormat('@');

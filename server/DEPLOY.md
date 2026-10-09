@@ -834,9 +834,9 @@ echo "更新程式：$OLD → $NEW（$(date '+%F %T')）" >> "$DATA/logs/deploy-
 
 **LINE 自動登入（2026-10-09，v0.7.0）**：
 - 順序：**先部署 GAS、再更新 Mac mini**。新 GAS 的橋接 `clock` 會多回每人的 `lineHash`（打卡 roster 的 `line_user_id` 在 Apps Script 內就轉成雜湊）；Mac mini 先更新也不會壞，只是 `lineHash` 一直是空的、LINE 登入全部「對不到人」退回選名字。
-- `server/.env` **選用**兩個鍵（不設就用預設，不用改 `.env`）：`LINE_CHANNEL_ID`（LINE Login 頻道 ID，預設 `2011292256`）、`LINE_LOGIN_PER_MIN`（每分鐘最多幾次 `lineLogin`，預設 30，超過回 BUSY）。改了要重啟伺服器。
+- `server/.env` **選用**兩個鍵（不設就用預設，不用改 `.env`）：`LINE_CHANNEL_ID`（LINE Login 頻道 ID，預設 `2011292256`）、`LINE_LOGIN_PER_MIN`（每個來源 IP 每分鐘最多幾次要打 LINE 驗證的 `lineLogin`，預設 10）、`LINE_LOGIN_GLOBAL_PER_MIN`（全體每分鐘上限，預設 120），超過回 BUSY。改了要重啟伺服器。
 - 伺服器要能連 `https://api.line.me`（驗 ID token，逾時 8 秒）；連不上時同仁看到「LINE 驗證暫時連不上」並退回選名字，不影響其他功能。
-- 更新後**重啟伺服器**（照上面），`lineLogin` 才會生效；`lineHash` **在下一輪每小時 mirror 時自動填上**（`mirror.log` 會有一行「LINE 綁定刷新：更新 N 人、已綁定 M 人」，`mirror-last.json` 的 `line`）。不想等就請主管在設定頁按一次「打卡同步」（同樣會填）。讀打卡名單失敗只記一行、跳過，不影響鏡像燈號。
+- 更新後**重啟伺服器**（照上面），`lineLogin` 才會生效；`lineHash` **在下一輪每小時 mirror 時自動填上**（`mirror.log` 會有一行「LINE 綁定刷新：更新 N 人、已綁定 M 人」，`mirror-last.json` 的 `line`）。不想等就請主管在設定頁按一次「打卡同步」（同樣會填）。讀打卡名單失敗只記一行、跳過，不影響鏡像燈號。解綁／改綁的同仁 pinVer 會 +1（所有已登入手機要重登，密碼不變）。
 - 鏡像寫回試算表的「LINE 綁定（雜湊）」欄一律空白（試算表不存）；回退到 GAS 後，主管按一次「打卡同步」就會重新填。
 - GAS 端的 `lineLogin`（只在回退到 GAS 時用到）要呼叫 `UrlFetchApp`，需要 `https://www.googleapis.com/auth/script.external_request` 權限；`gas/appsscript.json` **刻意還沒加**（加了之後 Eason 要在編輯器重新授權一次，授權前整個 Web App 與橋接都會失敗）。沒加的期間 GAS 的 `lineLogin` 回 SERVER、前端退回選名字＋密碼。
 
