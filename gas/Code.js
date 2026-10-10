@@ -90,26 +90,53 @@ function clockSource_() {
   };
 }
 
-/* 兩條保護（2026-10-11 審查 #35）——都只標 hold（lineHashUpdates 跳過、syncClock 不新增也不列離職），Mac mini 不用更新：
+/* 打卡同步的保護（2026-10-11 審查 #35）——都只標 hold（lineHashUpdates 跳過、syncClock 不新增也不列離職），Mac mini 不用更新：
  * R1：有來源這輪讀不到或沒有 line_user_id 欄 → 已判定主店、主店自己沒綁的人，綁定可能是從那家合併來的，整組這輪不動
- *     （否則總部表閃一下，靠總部綁定的人就被清空、pinVer+1 登出，下一輪又綁回）。
- * R2：設定 decide:true 的來源（總部）裡，名字不在 CLOCK_PRIMARY_ 的在職同仁 → hold，請 Eason 判定歸總部哪一組
- *     （否則主管先手動建在總部墨竹亭，同步又以來源的預設組別多建一筆）。 */
+ *     （否則總部表閃一下，靠總部綁定的人就被清空、pinVer+1 登出，下一輪又綁回）。訊息說出幾位（N1）。
+ * R2：設定 decide:true 的來源（總部）裡，名字不在 CLOCK_PRIMARY_ 的在職同仁 → hold，請 Eason 判定歸總部哪一組；
+ *     判定的主店是 decide 來源、卻沒寫合法 unit → 也 hold（N2：否則會套用來源預設組別、把手動建的人改錯組）。
+ * N3：判定表的 in＝Eason 判定時這個名字出現在哪些來源（含主店）。之後在 in 以外的來源冒出在職同名 → 整組 hold＋請確認是否同一人
+ *     （否則別店新進的同名同仁，LINE 會被合併到判定那位、用自己 LINE 登入變成別人）。沒寫 in 的判定＝不檢查（舊行為）。 */
 function holdForClock_(rawRows, res, missing, prim) {
   var key = function (r) { return r.src + ':' + r.empId; };
+  var nm = function (r) { return String(r.name || '').trim(); };
+  var labels = {}, decideSrc = {};
+  CLOCK_SOURCES_.forEach(function (c) { labels[c.src] = c.label; if (c.decide) decideSrc[c.src] = c.label; });
+  var holdGroup = function (mainKey) { res.rows.forEach(function (r) { if ((r.decided ? key(r) : r.dupOf) === mainKey) r.hold = true; }); };
+  // N3
+  res.rows.forEach(function (r) {
+    if (!r.decided) return;
+    var p = prim[nm(r)] || {};
+    if (!Array.isArray(p['in'])) return;
+    var ok = {}; ok[p.src] = 1; p['in'].forEach(function (x) { ok[x] = 1; });
+    var mk = key(r);
+    var extra = res.rows.filter(function (x) { return x.active && x.dupOf === mk && !ok[x.src]; });
+    if (!extra.length) return;
+    holdGroup(mk);
+    res.messages.push('「' + nm(r) + '」新出現在' + extra.map(function (x) { return labels[x.src] || x.src; }).join('、') + '名冊，請 Eason 確認是不是同一人（確認前不同步這個人）');
+  });
+  // N2
+  res.rows.forEach(function (r) {
+    if (!r.decided || r.hold || !decideSrc[r.src]) return;
+    var p = prim[nm(r)] || {};
+    if (p.unit && DZYB.STAFF_UNIT_IDS.indexOf(p.unit) >= 0) return;
+    holdGroup(key(r));
+    res.messages.push('「' + nm(r) + '」在' + decideSrc[r.src] + '名冊，判定沒寫歸總部哪一組（unit），請 Eason 補上（補上前不同步這個人）');
+  });
+  // R1
   if (Object.keys(missing).length) {
-    var own = {}, grp = {};
+    var own = {}, grp = {}, cnt = 0;
     rawRows.forEach(function (r) { own[key(r)] = String(r.lineHash || ''); });
-    res.rows.forEach(function (r) { if (r.decided && !own[key(r)]) grp[key(r)] = 1; });
+    res.rows.forEach(function (r) { if (r.decided && !r.hold && !own[key(r)]) { grp[key(r)] = 1; cnt++; } });
     res.rows.forEach(function (r) { var k = r.decided ? key(r) : r.dupOf; if (k && grp[k]) r.hold = true; });
+    if (cnt) res.messages.push('有名冊這輪讀不到或少了 line_user_id 欄，已判定主店的 ' + cnt + ' 位同仁這輪先不同步（下一輪讀到就恢復）');
   }
-  var decideSrc = {};
-  CLOCK_SOURCES_.forEach(function (c) { if (c.decide) decideSrc[c.src] = c.label; });
+  // R2
   res.rows.forEach(function (r) {
     if (!decideSrc[r.src] || !r.active || r.hold || r.dupOf || r.decided) return;
-    if (Object.prototype.hasOwnProperty.call(prim, String(r.name || '').trim())) return;
+    if (Object.prototype.hasOwnProperty.call(prim, nm(r))) return;
     r.hold = true;
-    res.messages.push('「' + String(r.name).trim() + '」在' + decideSrc[r.src] + '名冊，請 Eason 判定歸總部哪一組（判定前不同步這個人）');
+    res.messages.push('「' + nm(r) + '」在' + decideSrc[r.src] + '名冊，請 Eason 判定歸總部哪一組（判定前不同步這個人）');
   });
 }
 

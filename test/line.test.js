@@ -178,6 +178,22 @@ const verifyTEST = { verify: (t) => { const m = /^TEST:(.+)$/.exec(t); return m 
     books.HQ = books.HQ.map((r) => r.slice(0, 4));
     y = sv2.call('syncClock', { atoken: at2 });
     eq('#35 R1／R4：總部名冊少了 line_user_id 欄→不動、錯誤說出來', [by2('S-101').lineHash, by2('S-101').pinVer, JSON.stringify(y.data).includes('沒有 line_user_id 欄')], [A.lineHash('U-hq'), 0, true]);
+    // #35 N3：判定時沒在的來源冒出同名在職 → 整組 hold＋請確認；N2：主店是總部但判定沒寫 unit → hold；N1：讀不到時訊息說出幾位
+    G.SpreadsheetApp.openById = (id) => (books[id] ? sheetOf(books[id]) : save.open(id));
+    books.HQ = [H, ['HQ-02', '測試一', true, '', 'U-hq'], ['HQ-08', '測試八', true, '', '']];
+    books.JS = [H, ['J1', '測試一', true, '', ''], ['J5', '測試五', true, '', '']];
+    books.LZL = [H, ['L1', '測試五', true, '', 'U-new']];
+    G.CLOCK_SOURCES_ = [{ src: 'js', unit: 'mzt', store: '金山', ssId: 'JS', label: '金山' }, { src: 'hq', unit: 'hq-dzy', decide: true, ssId: 'HQ', label: '總部' },
+      { src: 'lzl', unit: 'mzt', store: '六張犁', ssId: 'LZL', label: '六張犁' }];
+    G.CLOCK_PRIMARY_ = { '測試一': { src: 'js', unit: 'hq-dzy', store: '', in: ['hq'] }, '測試五': { src: 'js', in: [] }, '測試八': { src: 'hq' } };
+    let g3 = vm.runInContext('clockSource_().read()', G);
+    const r3 = (id) => g3.rows.find((x) => x.empId === id);
+    eq('#35 N3：判定時不在的六張犁冒出同名有綁 → 整組 hold、訊息、主店那位綁定不動', [!!r3('J5').hold, !!r3('L1').hold, L.lineHashUpdates([{ id: 'S5', src: 'js:J5', lineHash: '' }], g3).length, g3.messages.some((m) => /測試五」新出現在六張犁/.test(m))], [true, true, 0, true]);
+    eq('#35 N3：判定時就在的來源（總部）照常合併', [!!r3('J1').hold, r3('J1').lineHash], [false, A.lineHash('U-hq')]);
+    eq('#35 N2：主店是總部、判定沒寫 unit → hold＋訊息', [!!r3('HQ-08').hold, g3.messages.some((m) => /測試八」在總部名冊，判定沒寫歸總部哪一組/.test(m))], [true, true]);
+    G.SpreadsheetApp.openById = (id) => { if (id === 'LZL') throw new Error('x'); return books[id] ? sheetOf(books[id]) : save.open(id); };
+    g3 = vm.runInContext('clockSource_().read()', G);
+    eq('#35 N1：有名冊讀不到 → 訊息說出幾位已判定的同仁先不同步', g3.messages.some((m) => /已判定主店的 \d+ 位同仁這輪先不同步/.test(m)), true);
     roster.data = save.data; G.SpreadsheetApp.openById = save.open; G.CLOCK_SOURCES_ = save.srcs; G.CLOCK_PRIMARY_ = save.prim; }
   // 舊的同仁分頁（12 欄、沒有 lineHash）照樣讀得到；寫入時自動補第 13 欄表頭
   const sh = book.getSheetByName('同仁');
