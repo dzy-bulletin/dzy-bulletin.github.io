@@ -140,7 +140,24 @@ const verifyTEST = { verify: (t) => { const m = /^TEST:(.+)$/.exec(t); return m 
   eq('GAS clockSource_：在職綁定→雜湊、沒綁→空、離職也算雜湊（同步時才清）', got.rows.map((r) => [r.empId, r.lineHash]), [['A1', want], ['A2', ''], ['A3', A.lineHash('U-left')]]);
   eq('GAS clockSource_：輸出不含原始 LINE userId', JSON.stringify(got).includes(UID) || JSON.stringify(got).includes('U-left'), false);
   roster.data[0] = ['emp_id', 'name', 'active', 'removed_at']; roster.data = roster.data.map((r) => r.slice(0, 4));
-  eq('GAS clockSource_：舊表沒有 line_user_id 欄→全部空字串', vm.runInContext('clockSource_().read()', G).rows.map((r) => r.lineHash), ['', '', '']);
+  eq('GAS clockSource_：舊表沒有 line_user_id 欄→不給 lineHash 屬性（logic 整店不動，#34 N4）', vm.runInContext('clockSource_().read()', G).rows.map((r) => 'lineHash' in r), [false, false, false]);
+  eq('GAS clockSource_：舊表沒有 line_user_id 欄→lineHashUpdates 不動（不會全店解綁登出）',
+     L.lineHashUpdates([{ id: 'S1', src: 'gf:A1', lineHash: want }], vm.runInContext('clockSource_().read()', G)).length, 0);
+  // 2026-10-11 Eason：總部、六張犁名冊也是來源。總部同仁的主店判定在別店（例：金山），在總部綁的 LINE 經 resolveClockRows 合併到主店那位
+  { const save = { data: roster.data, open: G.SpreadsheetApp.openById, srcs: G.CLOCK_SOURCES_, prim: G.CLOCK_PRIMARY_ };
+    const H = ['emp_id', 'name', 'active', 'removed_at', 'line_user_id'], books = {};
+    const sheetOf = (d) => ({ getSheetByName: () => ({ getDataRange: () => ({ getValues: () => d }) }) });
+    G.SpreadsheetApp.openById = (id) => (books[id] ? sheetOf(books[id]) : save.open(id));
+    books.JS = [H, ['J1', '測試一', true, '', ''], ['J2', '測試二', true, '', '']];
+    books.HQ = [H, ['HQ-02', '測試一', true, '', 'U-hq'], ['HQ-05', '測試三', true, '', ''], ['HQ-09', '測試二', true, '', 'U-other']];
+    G.CLOCK_SOURCES_ = [{ src: 'js', unit: 'mzt', store: '金山', ssId: 'JS', label: '金山' }, { src: 'hq', unit: 'hq-dzy', ssId: 'HQ', label: '總部' }];
+    G.CLOCK_PRIMARY_ = { '測試一': { src: 'js', unit: 'hq-dzy', store: '' }, '測試三': { src: 'hq', unit: 'hq-mzt', store: '' } };
+    const got = vm.runInContext('clockSource_().read()', G);
+    const st = [{ id: 'S1', src: 'js:J1', lineHash: '' }, { id: 'S2', src: 'js:J2', lineHash: '' }];
+    eq('總部當來源：已判定的人，總部綁的 LINE 合併到主店（金山）那位', JSON.parse(JSON.stringify(L.lineHashUpdates(st, got))), [{ id: 'S1', lineHash: A.lineHash('U-hq'), bump: false }]);
+    eq('總部當來源：沒判定的跨店同名→hold、不動、請 Eason 判定', [!!got.rows.find((r) => r.empId === 'J2').hold, got.messages.some((m) => /測試二/.test(m))], [true, true]);
+    eq('總部當來源：只在總部、已判定組別的人→主店列、套用判定的組別', (() => { const r = got.rows.find((x) => x.empId === 'HQ-05'); return [r.decided, r.unit]; })(), [true, 'hq-mzt']);
+    roster.data = save.data; G.SpreadsheetApp.openById = save.open; G.CLOCK_SOURCES_ = save.srcs; G.CLOCK_PRIMARY_ = save.prim; }
   // 舊的同仁分頁（12 欄、沒有 lineHash）照樣讀得到；寫入時自動補第 13 欄表頭
   const sh = book.getSheetByName('同仁');
   sh.data = [['id', '姓名', '單位', '密碼雜湊', 'salt', '密碼版本', '連續錯誤次數', '在職', '建立時間', '刪除時間', '來源（打卡系統）', '門市'],

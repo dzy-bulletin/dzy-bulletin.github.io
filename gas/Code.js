@@ -3,7 +3,7 @@
 'use strict';
 
 var WRITE_ACTIONS_ = ['setPin', 'login', 'ack', 'adminLogin', 'savePost', 'setPublished', 'setPinned', 'staffAdd', 'staffDelete', 'staffResetPin', 'syncClock', 'staffSetStore', 'lineLogin'];   // 必須與 Service.WRITE_ACTIONS 一致（test 檢查）
-var VERSION_ = '0.7.2';
+var VERSION_ = '0.7.3';
 // 後端搬 Mac mini（#5、#7）：指令碼屬性 PRIMARY＝gas（現況）／mini（已切到 Mac mini）。
 // mini 時寫入一律回 MOVED、讀取照常：還沒重新整理的舊頁面能看、不能寫（避免切換期雙寫）。uploadFile 也擋（與 Mac mini 的 READONLY 同步，免得留孤兒附件）。
 // 只有寫入動作才讀 PRIMARY（讀取動作零成本、PRIMARY 沒設時與改版前完全一樣）；寫入在拿到鎖之後再確認一次（等鎖期間才切 mini 也擋得住）。
@@ -54,7 +54,8 @@ function doPost(e) {
 
 /* 打卡系統名單（唯讀）：roster 分頁的 emp_id／name／active／removed_at／line_user_id。來源清單在 Config.local.js（不進 git）
  * line_user_id（打卡系統綁定的 LINE userId）只在這裡轉成 lineHash＝SHA-256('dzyb-line:' + userId) 的小寫 hex：
- * 原始 userId 絕不離開 Apps Script（橋接 clock 回給 Mac mini 的也只有雜湊）。沒有這一欄（舊表）或空白 → ''。 */
+ * 原始 userId 絕不離開 Apps Script（橋接 clock 回給 Mac mini 的也只有雜湊）。空白 → ''；名冊沒有這一欄 → 不給 lineHash 屬性
+ * （js/logic.js lineHashUpdates 視為不知道綁定狀態、整店不動，不會把全店當成解綁而登出；2026-10-11 審查 #34 N4）。 */
 function clockSource_() {
   if (typeof CLOCK_SOURCES_ === 'undefined') return null;
   return {
@@ -71,8 +72,9 @@ function clockSource_() {
             if (!String(r[iE]).trim()) return;
             if (active) n++;
             var uid = iL >= 0 ? String(r[iL] == null ? '' : r[iL]).trim() : '';
-            rows.push({ src: c.src, unit: c.unit, store: c.store || '', empId: String(r[iE]).trim(), name: String(r[iN]).trim(), active: active,
-              lineHash: uid ? lineHashOf_(uid) : '' });
+            var row = { src: c.src, unit: c.unit, store: c.store || '', empId: String(r[iE]).trim(), name: String(r[iN]).trim(), active: active };
+            if (iL >= 0) row.lineHash = uid ? lineHashOf_(uid) : '';
+            rows.push(row);
           });
           counts[c.label] = n; sources.push(c.src);
         } catch (e) { errors.push(c.label + '：讀取失敗，請確認打卡試算表還在、名單分頁叫 roster'); console.error(c.label + ': ' + e); }
