@@ -157,6 +157,27 @@ const verifyTEST = { verify: (t) => { const m = /^TEST:(.+)$/.exec(t); return m 
     eq('總部當來源：已判定的人，總部綁的 LINE 合併到主店（金山）那位', JSON.parse(JSON.stringify(L.lineHashUpdates(st, got))), [{ id: 'S1', lineHash: A.lineHash('U-hq'), bump: false }]);
     eq('總部當來源：沒判定的跨店同名→hold、不動、請 Eason 判定', [!!got.rows.find((r) => r.empId === 'J2').hold, got.messages.some((m) => /測試二/.test(m))], [true, true]);
     eq('總部當來源：只在總部、已判定組別的人→主店列、套用判定的組別', (() => { const r = got.rows.find((x) => x.empId === 'HQ-05'); return [r.decided, r.unit]; })(), [true, 'hq-mzt']);
+    // #35 R1／R2／R6：接上 Service.syncClock，跑兩輪
+    books.HQ = [H, ['HQ-02', '測試一', true, '', 'U-hq'], ['HQ-05', '測試三', true, '', ''], ['HQ-07', '測試四', true, '', '']];
+    G.CLOCK_SOURCES_ = [{ src: 'js', unit: 'mzt', store: '金山', ssId: 'JS', label: '金山' }, { src: 'hq', unit: 'hq-dzy', decide: true, ssId: 'HQ', label: '總部' }];
+    books.JS = [H, ['J1', '測試一', true, '', '']];
+    const st2 = memStore([S0('S-101', '測試一', 'hq-dzy', { src: 'js:J1', pinHash: A.hashPin('z', '2468'), salt: 'z' }), S0('S-103', '測試三', 'hq-mzt')]);
+    const src2 = { read: () => JSON.parse(JSON.stringify(vm.runInContext('clockSource_().read()', G))) };
+    const sv2 = makeService_(L, st2, { quota: () => null }, A, clock, src2, verifyTEST);
+    const at2 = A.makeAdminToken('SECRET', 1, Date.now() + 60e3), by2 = (id) => st2.d.staff.find((s) => s.id === id);
+    let y = sv2.call('syncClock', { atoken: at2 });
+    eq('#35 第 1 輪：總部綁的 LINE 合併到金山主店那位（不 bump）', [by2('S-101').lineHash, by2('S-101').pinVer], [A.lineHash('U-hq'), 0]);
+    eq('#35 只在總部、已判定組別的手動同仁→對應、不重複新增', [by2('S-103').src, st2.d.staff.filter((s) => s.name === '測試三').length], ['hq:HQ-05', 1]);
+    eq('#35 R2：只在總部、沒判定的人→不新增、訊息請 Eason 判定', [st2.d.staff.some((s) => s.name === '測試四'), JSON.stringify(y.data).includes('請 Eason 判定歸總部哪一組')], [false, true]);
+    const tk = sv2.call('lineLogin', { idToken: 'TEST:U-hq' }).data.token;
+    eq('#35 第 1 輪後：總部綁的 LINE 直接登入那位', sv2.call('board', { token: tk }).ok, true);
+    G.SpreadsheetApp.openById = (id) => { if (id === 'HQ') throw new Error('暫時打不開'); return books[id] ? sheetOf(books[id]) : save.open(id); };
+    y = sv2.call('syncClock', { atoken: at2 });
+    eq('#35 R1：總部讀不到那輪→綁定不動、不 bump、憑證仍有效', [by2('S-101').lineHash, by2('S-101').pinVer, sv2.call('board', { token: tk }).ok], [A.lineHash('U-hq'), 0, true]);
+    G.SpreadsheetApp.openById = (id) => (books[id] ? sheetOf(books[id]) : save.open(id));
+    books.HQ = books.HQ.map((r) => r.slice(0, 4));
+    y = sv2.call('syncClock', { atoken: at2 });
+    eq('#35 R1／R4：總部名冊少了 line_user_id 欄→不動、錯誤說出來', [by2('S-101').lineHash, by2('S-101').pinVer, JSON.stringify(y.data).includes('沒有 line_user_id 欄')], [A.lineHash('U-hq'), 0, true]);
     roster.data = save.data; G.SpreadsheetApp.openById = save.open; G.CLOCK_SOURCES_ = save.srcs; G.CLOCK_PRIMARY_ = save.prim; }
   // 舊的同仁分頁（12 欄、沒有 lineHash）照樣讀得到；寫入時自動補第 13 欄表頭
   const sh = book.getSheetByName('同仁');

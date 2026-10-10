@@ -60,12 +60,13 @@ function clockSource_() {
   if (typeof CLOCK_SOURCES_ === 'undefined') return null;
   return {
     read: function () {
-      var rows = [], errors = [], counts = {}, sources = [];
+      var rows = [], errors = [], counts = {}, sources = [], missing = {};   // missing：這輪讀不到或沒有 line_user_id 欄的來源（#35 R1）
       CLOCK_SOURCES_.forEach(function (c) {
         try {
           var v = SpreadsheetApp.openById(c.ssId).getSheetByName('roster').getDataRange().getValues();
           var h = v[0].map(String), iE = h.indexOf('emp_id'), iN = h.indexOf('name'), iA = h.indexOf('active'), iR = h.indexOf('removed_at'), iL = h.indexOf('line_user_id');
           if (iE < 0 || iN < 0 || iA < 0) throw new Error('roster 欄位不符');
+          if (iL < 0) { missing[c.src] = 1; errors.push(c.label + '：名冊沒有 line_user_id 欄，這家店的 LINE 綁定先不更新'); }   // #35 R4：說出來
           var n = 0;
           v.slice(1).forEach(function (r) {
             var active = (r[iA] === true || String(r[iA]).toUpperCase() === 'TRUE') && !(iR >= 0 && String(r[iR]).trim());
@@ -77,14 +78,39 @@ function clockSource_() {
             rows.push(row);
           });
           counts[c.label] = n; sources.push(c.src);
-        } catch (e) { errors.push(c.label + '：讀取失敗，請確認打卡試算表還在、名單分頁叫 roster'); console.error(c.label + ': ' + e); }
+        } catch (e) { missing[c.src] = 1; errors.push(c.label + '：讀取失敗，請確認打卡試算表還在、名單分頁叫 roster'); console.error(c.label + ': ' + e); }
       });
       // 跨店同名：依 Config.local.js 的 CLOCK_PRIMARY_（Eason 判定的主店）整理，規則見 js/logic.js resolveClockRows
       var labels = {}; CLOCK_SOURCES_.forEach(function (c) { labels[c.src] = c.label; });
-      var res = DZYB.resolveClockRows(rows, typeof CLOCK_PRIMARY_ === 'undefined' ? {} : CLOCK_PRIMARY_, labels);
+      var prim = typeof CLOCK_PRIMARY_ === 'undefined' ? {} : CLOCK_PRIMARY_;
+      var res = DZYB.resolveClockRows(rows, prim, labels);
+      holdForClock_(rows, res, missing, prim);
       return { rows: res.rows, errors: errors, messages: res.messages, counts: counts, sources: sources };
     }
   };
+}
+
+/* 兩條保護（2026-10-11 審查 #35）——都只標 hold（lineHashUpdates 跳過、syncClock 不新增也不列離職），Mac mini 不用更新：
+ * R1：有來源這輪讀不到或沒有 line_user_id 欄 → 已判定主店、主店自己沒綁的人，綁定可能是從那家合併來的，整組這輪不動
+ *     （否則總部表閃一下，靠總部綁定的人就被清空、pinVer+1 登出，下一輪又綁回）。
+ * R2：設定 decide:true 的來源（總部）裡，名字不在 CLOCK_PRIMARY_ 的在職同仁 → hold，請 Eason 判定歸總部哪一組
+ *     （否則主管先手動建在總部墨竹亭，同步又以來源的預設組別多建一筆）。 */
+function holdForClock_(rawRows, res, missing, prim) {
+  var key = function (r) { return r.src + ':' + r.empId; };
+  if (Object.keys(missing).length) {
+    var own = {}, grp = {};
+    rawRows.forEach(function (r) { own[key(r)] = String(r.lineHash || ''); });
+    res.rows.forEach(function (r) { if (r.decided && !own[key(r)]) grp[key(r)] = 1; });
+    res.rows.forEach(function (r) { var k = r.decided ? key(r) : r.dupOf; if (k && grp[k]) r.hold = true; });
+  }
+  var decideSrc = {};
+  CLOCK_SOURCES_.forEach(function (c) { if (c.decide) decideSrc[c.src] = c.label; });
+  res.rows.forEach(function (r) {
+    if (!decideSrc[r.src] || !r.active || r.hold || r.dupOf || r.decided) return;
+    if (Object.prototype.hasOwnProperty.call(prim, String(r.name || '').trim())) return;
+    r.hold = true;
+    res.messages.push('「' + String(r.name).trim() + '」在' + decideSrc[r.src] + '名冊，請 Eason 判定歸總部哪一組（判定前不同步這個人）');
+  });
 }
 
 function lineHashOf_(uid) { return gasCrypto_().sha256Hex(DZYB.LINE_HASH_PREFIX + uid); }
