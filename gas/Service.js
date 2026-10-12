@@ -301,7 +301,7 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify) {
         if (!r.active) return;
         // 跨店同名（L.resolveClockRows 標的）：hold＝待 Eason 判定、dupOf＝不是主店那列，都不新增
         if (r.hold || r.dupOf) return;
-        var had = all.filter(function (s) { return s.src === key; })[0], migrated = false;
+        var mine = all.filter(function (s) { return s.src === key; }), had = mine.filter(function (s) { return s.active; })[0] || mine[0], migrated = false;   // 同來源有在職的就取在職那筆（#37 N2）
         if (had && !had.active) {
           // 打卡同步來的那筆已在佈告欄刪除、主管又手動新增同名在職同仁（2026-10-12 實遇：央廚同步來的被刪、改手動加在總部鼎兆元）：
           // 來源改接到手動那筆，LINE 綁定才對得到。單位與門市照主管手動設的（判定過主店的照主店，同下方 decided 分支）；同名手動在職不只一位就不猜
@@ -309,7 +309,8 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify) {
           if (man.length > 1) { notes.push('「' + name + '」打卡同步來的那筆已刪除，同仁名單有 ' + man.length + ' 筆手動新增的同名同仁（' + man.map(function (s) { return s.id; }).join('、') + '），無法判斷要接哪一筆，LINE 自動登入暫時對不到；請刪掉多的那筆再同步'); return; }
           if (man.length === 1) {
             had.src = ''; had.lineHash = ''; store.saveStaff(had);              // 已刪除那筆放掉來源與綁定（它不在職，不必 pinVer+1）
-            had = man[0]; had.src = key; adopted++; relinked.push(name + '（' + (L.STAFF_UNIT_NAME[had.unit] || had.unit) + '）');
+            var was = L.STAFF_UNIT_NAME[had.unit] || had.unit;
+            had = man[0]; had.src = key; adopted++; relinked.push(name + '（已刪除的' + was + '那筆→' + (L.STAFF_UNIT_NAME[had.unit] || had.unit) + '）');
             if (r.decided) migrated = true;
             else { if (r.store && !had.store && had.unit === r.unit) had.store = r.store; store.saveStaff(had); return; }
           }
@@ -336,7 +337,7 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify) {
           if (migrated) store.saveStaff(had);
           return;
         }
-        if (had) { if (r.store && !had.store && had.active) { had.store = r.store; store.saveStaff(had); } return; }   // 已同步過（含被手動刪除的，不再加回）；補上門市
+        if (had) { if (r.store && !had.store && had.active && had.unit === r.unit) { had.store = r.store; store.saveStaff(had); } return; }   // 已同步過（含被手動刪除的，不再加回）；補上門市（別單位的不補，#37 N1）
         var same = all.filter(function (s) { return s.active && !s.src && s.name === name && s.unit === r.unit; })[0];
         if (same) { same.src = key; if (r.store && !same.store) same.store = r.store; store.saveStaff(same); adopted++; return; }   // 手動建過的同一人：補上來源
         var gone = all.filter(function (s) { return !s.active && !s.src && s.name === name && s.unit === r.unit; })[0];

@@ -170,7 +170,7 @@ const clock = { nowMs: () => Date.now(), today: () => '2026-10-10' };
       [R('cf', 'cf', 'HQ-01', '甲', { lineHash: H1 })]);
     eq('改接：手動那筆拿到來源與 LINE 綁定、單位不變、密碼不動、不登出', [t.by('S-044').src, t.by('S-044').unit, t.by('S-044').lineHash, t.by('S-044').pinHash, t.by('S-044').pinVer], ['cf:HQ-01', 'hq-dzy', H1, 'p', 2]);
     eq('改接：已刪除那筆放掉來源與綁定、仍是刪除', [t.by('S-023').src, t.by('S-023').lineHash, t.by('S-023').active], ['', '', false]);
-    eq('改接：結果列出、算對應、不新增、沒有錯誤、不列離職', [t.r.data.relinked, t.r.data.adopted, t.r.data.added, t.r.data.errors, t.r.data.left], [['甲（總部鼎兆元）'], 1, [], [], []]);
+    eq('改接：結果列出、算對應、不新增、沒有錯誤、不列離職', [t.r.data.relinked, t.r.data.adopted, t.r.data.added, t.r.data.errors, t.r.data.left], [['甲（已刪除的央廚那筆→總部鼎兆元）'], 1, [], [], []]);
     eq('改接後可用 LINE 登入到手動那筆', t.sv.call('lineLogin', { idToken: 'TEST:U1' }).data.me.id, 'S-044');
     const saves = t.st.d.saves; const r2 = t.sv.call('syncClock', { atoken: at });
     eq('第二次同步沒有變化就不寫', [t.st.d.saves, r2.data.relinked, r2.data.adopted], [saves, [], 0]); }
@@ -183,12 +183,18 @@ const clock = { nowMs: () => Date.now(), today: () => '2026-10-10' };
   { const t = run([S0('S-1', '甲', 'cf', { src: 'cf:C1', active: false, deletedAt: 'x' }), S0('S-2', '甲', 'hq-dzy', { src: 'js:J9' })], [R('cf', 'cf', 'C1', '甲')]);
     eq('同名在職的是別的來源同步來的（不是手動）：不動', [t.by('S-2').src, t.by('S-1').src, t.r.data.relinked], ['js:J9', 'cf:C1', []]); }
   { const t = run([S0('S-1', '甲', 'cf', { src: 'cf:C1', active: false, deletedAt: 'x' }), S0('S-2', '甲', 'cf')], [R('cf', 'cf', 'C1', '甲', { store: '' })]);
-    eq('同單位手動重建也接上', [t.by('S-2').src, t.by('S-2').unit, t.r.data.relinked], ['cf:C1', 'cf', ['甲（央廚）']]); }
+    eq('同單位手動重建也接上', [t.by('S-2').src, t.by('S-2').unit, t.r.data.relinked], ['cf:C1', 'cf', ['甲（已刪除的央廚那筆→央廚）']]); }
   { const t = run([S0('S-1', '甲', 'mzt', { src: 'mgf:G1', active: false, deletedAt: 'x', store: '光復' }), S0('S-2', '甲', 'hq-dzy')],
       [R('mgf', 'mzt', 'G1', '甲'), R('js', 'mzt', 'J1', '甲')], { 甲: { src: 'mgf', unit: 'hq-mzt', store: '', in: ['js'] } });
-    eq('判定過主店的人：主店那筆已刪＋手動重建 → 接上並照判定的單位', [t.by('S-2').src, t.by('S-2').unit, t.by('S-1').src, t.r.data.relinked, t.r.data.errors], ['mgf:G1', 'hq-mzt', '', ['甲（總部鼎兆元）'], []]); }
+    eq('判定過主店的人：主店那筆已刪＋手動重建 → 接上並照判定的單位', [t.by('S-2').src, t.by('S-2').unit, t.by('S-1').src, t.r.data.relinked, t.r.data.errors], ['mgf:G1', 'hq-mzt', '', ['甲（已刪除的墨竹亭那筆→總部鼎兆元）'], []]); }
   { const t = run([S0('S-1', '甲', 'cf', { src: 'cf:C1', active: false, deletedAt: 'x', lineHash: H1 }), S0('S-2', '甲', 'hq-dzy')], [R('cf', 'cf', 'C1', '甲', { active: false, lineHash: H1 })]);
     eq('打卡已離職：不改接', [t.by('S-2').src, t.by('S-1').src, t.r.data.relinked], ['', 'cf:C1', []]); }
+  { const t = run([S0('S-1', '甲', 'mzt', { src: 'mgf:G1', active: false, deletedAt: 'x' }), S0('S-2', '甲', 'hq-dzy')], [R('mgf', 'mzt', 'G1', '甲')]);
+    eq('#37 N1：來源有門市、手動在別單位 → 不補門市', [t.by('S-2').src, t.by('S-2').unit, t.by('S-2').store], ['mgf:G1', 'hq-dzy', '']);
+    const saves = t.st.d.saves; const r2 = t.sv.call('syncClock', { atoken: at });
+    eq('#37 N1：第二次同步不寫、門市仍空', [t.st.d.saves, t.by('S-2').store, r2.data.relinked], [saves, '', []]); }
+  { const t = run([S0('S-1', '甲', 'cf', { src: 'cf:C1', active: false, deletedAt: 'x' }), S0('S-2', '甲', 'cf', { src: 'cf:C1' }), S0('S-3', '甲', 'hq-dzy')], [R('cf', 'cf', 'C1', '甲')]);
+    eq('#37 N2：同來源已有在職那筆 → 不再改接第三位', [t.by('S-3').src, t.by('S-2').src, t.r.data.relinked], ['', 'cf:C1', []]); }
 }
 
 console.log(`primary.test：${pass} 通過、${fail} 失敗`);
