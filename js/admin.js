@@ -193,6 +193,7 @@ var Admin = (function () {
         '各來源在職人數：' + Object.keys(sy.counts || {}).map(function (k) { return esc(k) + ' ' + sy.counts[k] + ' 人'; }).join('、') + '<br>' +
         '新增 ' + sy.added.length + ' 人' + (sy.added.length ? '：' + sy.added.map(esc).join('、') : '') +
         (sy.adopted ? '<br>已對應既有名單 ' + sy.adopted + ' 人' : '') +
+        (sy.relinked && sy.relinked.length ? '<br>打卡同步來的那筆已刪除，改接到手動新增的同名同仁（之後可用打卡綁定的 LINE 自動登入）：' + sy.relinked.map(esc).join('、') + '<br>　如果其實是不同人：先刪掉這位，只手動加回舊同仁（用他原本的單位）並按一次同步，之後再新增這位新同仁' : '') +
         (sy.moved && sy.moved.length ? '<br>依主店判定調整：' + sy.moved.map(esc).join('、') : '') +
         (sy.left.length ? '<br>⚠️ 打卡系統已離職、但仍在佈告欄名單（請自行決定是否刪除）：' + sy.left.map(function (x) { return esc(x.name) + '（' + L.STAFF_UNIT_NAME[x.unit] + '）'; }).join('、') : '') +
         (sy.errors.length ? '<br>❌ ' + sy.errors.map(esc).join('<br>❌ ') : '') + '</div>';
