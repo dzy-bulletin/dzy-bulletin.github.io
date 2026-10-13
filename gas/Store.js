@@ -5,9 +5,9 @@
 var SHEETS_ = {
   posts: { name: '公告', cols: ['id', 'title', 'body', 'units', 'publishOn', 'expiresOn', 'pinned', 'published', 'offOn', 'files', 'createdAt', 'updatedAt'],
     head: ['id', '標題', '內容', '單位', '上架日', '到期日', '置頂', '上架中', '手動下架日', '附件', '建立時間', '最後修改時間'] },
-  // lineHash（2026-10-09，LINE 自動登入）：欄位只能加在最後、不可重排；沒有這一欄的舊表讀到空字串（write 會自動補表頭）
-  staff: { name: '同仁', cols: ['id', 'name', 'unit', 'pinHash', 'salt', 'pinVer', 'fail', 'active', 'createdAt', 'deletedAt', 'src', 'store', 'lineHash'],
-    head: ['id', '姓名', '單位', '密碼雜湊', 'salt', '密碼版本', '連續錯誤次數', '在職', '建立時間', '刪除時間', '來源（打卡系統）', '門市', 'LINE 綁定（雜湊）'] },
+  // lineHash（2026-10-09，LINE 自動登入）、dzy（管理系統 emp_no，同仁名單改讀管理系統）：欄位只能加在最後、不可重排；沒有這一欄的舊表讀到空字串（write 會自動補表頭）
+  staff: { name: '同仁', cols: ['id', 'name', 'unit', 'pinHash', 'salt', 'pinVer', 'fail', 'active', 'createdAt', 'deletedAt', 'src', 'store', 'lineHash', 'dzy'],
+    head: ['id', '姓名', '單位', '密碼雜湊', 'salt', '密碼版本', '連續錯誤次數', '在職', '建立時間', '刪除時間', '來源（打卡系統）', '門市', 'LINE 綁定（雜湊）', '管理系統編號（dzy）'] },
   // 名單快照欄位定義（寫在獨立的公開名單試算表，見 snapBook_；setup 不在主試算表建這個分頁）
   snap: { name: '名單快照', cols: ['id', 'name', 'unit', 'store', 'hasPin', 'locked'], head: ['id', 'name', 'unit', 'store', 'hasPin', 'locked'] },
   reads: { name: '已讀', cols: ['postId', 'staffId', 'name', 'unit', 'at', 'sigId'],

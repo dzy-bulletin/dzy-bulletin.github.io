@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- 鼎兆元｜電子佈告欄 — 同仁名單雙跑比對（node server/staff-dzy.js dual，F6／階段 7 G2，選用）：每天 06:30（系統時區須為台北）。
+     STAFF_SOURCE=clock（舊路徑）期間，每天算一次「新路徑（管理系統）若現在就切會算出的名單」vs「今天佈告欄實際的名單」，
+     比三件事：在職、主店、LINE 雜湊；結果寫 DATA_DIR/logs/staff-dual-<日期>.json，只有 S-xxx 編號，沒有姓名。
+     連續 7 天全同才可拆舊（node server/staff-dzy.js dual-status）。只讀，不改任何同仁資料。
+     需要 server/.env 有 DZY_PLATFORM_URL、BULLETIN_SVC_KEY（本機 127.0.0.1:8799）；沒設會失敗並 exit 1，不影響別的工作。
+     範本佔位字串同 com.dzy.bulletin.plist；安裝見 DEPLOY.md「同仁名單改讀管理系統」（附錄 A 路線改裝成 LaunchDaemon）。 -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.dzy.bulletin.staffdual</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__NODE__</string>
+    <string>__REPO__/server/staff-dzy.js</string>
+    <string>dual</string>
+  </array>
+  <key>WorkingDirectory</key><string>__REPO__</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>DATA_DIR</key><string>__DATA_DIR__</string>
+  </dict>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key><integer>6</integer>
+    <key>Minute</key><integer>30</integer>
+  </dict>
+  <key>StandardOutPath</key><string>__DATA_DIR__/logs/staffdual.out.log</string>
+  <key>StandardErrorPath</key><string>__DATA_DIR__/logs/staffdual.err.log</string>
+</dict>
+</plist>

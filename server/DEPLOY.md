@@ -855,3 +855,24 @@ echo "更新程式：$OLD → $NEW（$(date '+%F %T')）" >> "$DATA/logs/deploy-
 4. 隔一小時看 `curl -s http://127.0.0.1:8793/health`：`files.pending=0`、`files.stale=0`。
 5. 找一個真的接近 20MB 的附件確認分段跑通：`mirror.log` 有補到它、`$DATA/files/<它的 id>.json` 的 `size` 約 20MB、`--files-verify` 全部相符。
 6. 回報 #18：`--files-scan` 那行原文、`/health` 的 `files`、20MB 那一筆的結果。
+
+## 附錄 D：同仁名單改讀管理系統（F6／階段 7，v0.7.5）
+
+做什麼：佈告欄的同仁名單（新人、離職、改名、單位、主店）改以管理系統的 `svcDirectory` 為準（鍵＝staff 新欄 `dzy`），LINE 雜湊仍由打卡名冊算。**預設完全不變**（`STAFF_SOURCE` 沒設＝`clock`）；不照下面順序做，行為跟今天一樣。
+
+`server/.env` 要補（金鑰由 Eason 親手貼，不進對話、不進 git）：`DZY_PLATFORM_URL=http://127.0.0.1:8799/platform/api`、`BULLETIN_SVC_KEY=<與管理系統指令碼屬性相同>`。非 127.0.0.1 的網址程式一律拒絕。
+
+兩個旗標（存在資料庫 kv）：**已搬家**（`migrate --apply` 通過時寫）、**可切換**（雙跑連續 7 天全同、`dualStatus.canRetire` 為真時由 `dual` 自動寫，人不能手寫）。`STAFF_SOURCE=dzy` 必須兩個旗標都在才生效，否則自動當 clock 並在啟動紀錄警告。
+
+順序（每一步都可停、都可回頭）：
+1. 管理系統那邊先上線 `svcDirectory`（`BULLETIN_SVC_KEY` 已設；回全部 staff 含停用，帶 `active`、`total`、`generated_at`）。
+2. MacBook：`clasp push`＋`clasp deploy -i <部署ID>`（v0.7.5：橋接 `clock` 多一個 `raw` 模式、同仁分頁加 `dzy` 欄）。**橋接回應不是 raw 的一律不採用**（舊版 GAS 會被當成「打卡名冊讀不到」，雙跑不算全同），所以雙跑開始前 GAS 必須是 v0.7.5。
+3. Mac mini：附錄 B 更新程式、重啟伺服器。此時 `STAFF_SOURCE` 沒設＝clock，行為與更新前相同。
+4. **搬家檢查**：`node server/staff-dzy.js migrate`（只報告，不寫入）。印「在職：唯一對上／無對照／多重對照」與 S-xxx 編號（不印姓名）。在職有任何「無對照」「多重對照」＝拒絕切換：手動新增的同仁沒有打卡 src，要人工指定 `--map 檔.json`（`{"S-045":"DZY123"}`，檔案放 repo 外）；多重對照要先處理。管理系統名單有重複 emp_no、筆數與 `total` 不符會整個中止。姓名與管理系統不同的在職同仁也會擋，確認是同一人後加 `--allow-name-diff`（這些人認領時**清掉舊密碼與 LINE 綁定並 pinVer+1**，避免舊帳號被轉給新人）。
+5. **搬家套用**：`node server/staff-dzy.js migrate --apply [--map …]`。先把整張 staff 表存成 `$DATA/backups/staff-snapshot-<時間>.json`（只存最早那份，重跑不覆蓋），再填 `dzy`、寫「已搬家」旗標。**此時仍是 clock 模式**。
+6. **每日自動雙跑**：mirror 每小時在 clock 模式、已搬家、今天還沒比過時會自己跑一次雙跑；也可裝 `server/launchd/com.dzy.bulletin.staffdual.plist`（每天 06:30）。每天結果在 `$DATA/logs/staff-dual-<日期>.json`（只有 S-xxx）。比三件事：在職、主店、在職者的 LINE 雜湊；新路徑那輪若會被拒寫（打卡編號歧義、同一 LINE 綁給兩人、已連結者缺列）也算不同。`node server/staff-dzy.js dual-status` 看連續天數；連續 7 天全同時 `dual` 才寫「可切換」。有差異就逐一查。
+7. **切換**：`server/.env` 加 `STAFF_SOURCE=dzy`、重啟伺服器。mirror 每小時改成同步管理系統；管理頁沒有「打卡同步」按鈕；`syncClock` 回「已改由管理系統同步」；LINE 登入遇到同一 LINE 對到兩位在職者一律拒絕（不給選）；橋接讀打卡名冊走 raw，不再讀 `CLOCK_PRIMARY_`。先 `node server/staff-dzy.js sync --dry-run` 看會做什麼。姓名不一致、不自動認領的列在「待人工認領」，確認同一人後 `node server/staff-dzy.js claim S-xxx DZYxxx`。
+8. **同步失敗要看得到**：dzy 同步失敗（管理系統連不上、空名單、重複 emp_no、total 不符、已連結者缺列、打卡編號歧義、LINE 重複、一輪停用過多）＝整輪不寫入，mirror `ok=false`、退出碼非 0（連續失敗 /health 轉黃），`$DATA/logs/staff-dzy-last.json` 記最後成功時間與原因。多個來源的 LINE 綁定不一致時鎖住該人的自動登入並在 mirror.log 告警。
+9. **回退（rollback）**：`node server/staff-dzy.js rollback`，然後 `server/.env` 的 `STAFF_SOURCE` 改回 `clock`（或刪掉）並重啟。rollback 會：把搬家前快照裡每位同仁的姓名／單位／門市／在職／src 恢復成搬家前（**保留現有密碼**，不救回舊密碼）、快照之後新增的同仁保留、清掉「已搬家」「可切換」兩個旗標、**全部**同仁 pinVer+1（所有已登入的手機重新登入）。沒有快照就拒絕、什麼都不動。要再切換得重新 `migrate --apply` 並重新雙跑 7 天。
+- 安全閥：管理系統回空名單、連不上、一輪要停用超過 max(3, 20%) 的人 → 整輪不動（`--allow-mass` 確認過才放行）。
+- 拆舊（雙跑滿 7 天且切換穩定後）：移除 `CLOCK_PRIMARY_`、`syncClock`、`resolveClockRows` 與按鈕程式——這一版**沒有刪**，保留回退。
