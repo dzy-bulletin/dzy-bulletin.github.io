@@ -5,10 +5,13 @@
  * clock: { nowMs(), today() }
  * clockSrc（選用）: read() → { rows:[{src, unit, empId, name, active, lineHash}], errors:[字串], sources:[來源] }（打卡系統名單，唯讀；
  *   lineHash＝SHA-256('dzyb-line:' + LINE userId)，原始 userId 不離開 Apps Script）
+ * opts（選用）: { staffSource: 'clock'|'dzy' }
  * lineVerify（選用）: verify(idToken) → 驗證過的 LINE userId（sub）或 null（LINE ID token 驗證；Mac mini 用 async 墊片、GAS 用 UrlFetchApp、本機假資料認 'TEST:<uid>'） */
 'use strict';
 
-function makeService_(L, store, files, auth, clock, clockSrc, lineVerify) {
+function makeService_(L, store, files, auth, clock, clockSrc, lineVerify, opts) {
+  // opts.staffSource（選用）：'clock'（預設，今天行為）｜'dzy'（同仁名單改讀管理系統：沒有打卡同步，由 Mac mini 的 server/staff-dzy.js 同步）
+  var staffSource = opts && opts.staffSource === 'dzy' ? 'dzy' : 'clock';
   var ADMIN_TOKEN_MS = 7 * 24 * 3600e3;   // 主管登入記住 7 天（2026-09-30 Eason 指定；原 12 小時）
   function err(code, message) { var e = new Error(message || code); e.code = code; return e; }
   function iso() { return new Date(clock.nowMs()).toISOString(); }
@@ -188,7 +191,7 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify) {
       try { quota = files.quota(); } catch (e) { quota = null; }
       mark();
       if (typeof Logger !== 'undefined') console.log('adminData ms=' + JSON.stringify(t.slice(1).map(function (x, i) { return x - t[i]; })));   // 診斷只進紀錄（C12）
-      return { today: td, posts: posts, staff: staff, quota: quota };
+      return { today: td, posts: posts, staff: staff, quota: quota, staffSource: staffSource };
     },
     receipts: function (q) {
       requireAdmin(q);
@@ -291,6 +294,7 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify) {
     // 從打卡系統同步：只新增在職且尚未在名單的人；打卡已離職者只列出，不自動刪除
     syncClock: function (q) {
       requireAdmin(q);
+      if (staffSource === 'dzy') throw err('BAD_REQ', '同仁名單已改由管理系統同步，不再使用打卡同步');
       if (!clockSrc) throw err('BAD_REQ', '未設定打卡系統來源');
       var got = clockSrc.read(), all = store.getStaff(), added = [], adopted = 0, moved = [], notes = [], relinked = [];
       var liveKeys = {};

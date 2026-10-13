@@ -855,3 +855,21 @@ echo "更新程式：$OLD → $NEW（$(date '+%F %T')）" >> "$DATA/logs/deploy-
 4. 隔一小時看 `curl -s http://127.0.0.1:8793/health`：`files.pending=0`、`files.stale=0`。
 5. 找一個真的接近 20MB 的附件確認分段跑通：`mirror.log` 有補到它、`$DATA/files/<它的 id>.json` 的 `size` 約 20MB、`--files-verify` 全部相符。
 6. 回報 #18：`--files-scan` 那行原文、`/health` 的 `files`、20MB 那一筆的結果。
+
+## 附錄 D：同仁名單改讀管理系統（F6／階段 7，v0.7.5）
+
+做什麼：佈告欄的同仁名單（新人、離職、改名、單位、主店）改以管理系統的 `svcDirectory` 為準（鍵＝staff 新欄 `dzy`），LINE 雜湊仍由打卡名冊算。**預設完全不變**（`STAFF_SOURCE` 沒設＝`clock`）；不照下面順序做，行為跟今天一樣。
+
+`server/.env` 要補（金鑰由 Eason 親手貼，不進對話、不進 git）：`DZY_PLATFORM_URL=http://127.0.0.1:8799/platform/api`、`BULLETIN_SVC_KEY=<與管理系統指令碼屬性相同>`。非 127.0.0.1 的網址程式一律拒絕。
+
+順序（每一步都可停、都可回頭）：
+1. 管理系統那邊先上線 `svcDirectory`（`BULLETIN_SVC_KEY` 已設）。
+2. MacBook：`clasp push`＋`clasp deploy -i <部署ID>`（v0.7.5：橋接 `clock` 多一個 `raw` 模式、同仁分頁加 `dzy` 欄）。**先 GAS 或先 Mac mini 都不會壞**，但雙跑／切換要用 raw 模式，所以切換前 GAS 必須是 v0.7.5。
+3. Mac mini：附錄 B 更新程式、重啟伺服器。此時 `STAFF_SOURCE` 沒設＝clock，行為與更新前相同（既有測試全綠）。
+4. **搬家檢查**：`node server/staff-dzy.js migrate`（只報告，不寫入）。印「在職：唯一對上／無對照／多重對照」與 S-xxx 編號（不印姓名）。在職有任何「無對照」「多重對照」＝拒絕切換：手動新增的同仁沒有打卡 src，要人工指定 `--map 檔.json`（`{"S-045":"DZY123"}`，檔案放 repo 外）；多重對照要先處理（佈告欄同一人兩筆、或管理系統同一打卡編號掛兩人）。姓名與管理系統不同的在職同仁也會擋，確認是改名而非錯配後加 `--allow-name-diff`。
+5. **搬家套用**：`node server/staff-dzy.js migrate --apply [--map …]`。先把整張 staff 表存成 `$DATA/backups/staff-snapshot-<時間>.json`，再填 `dzy`、寫入旗標。**此時仍是 clock 模式**，dzy 欄只是先存著。
+6. **雙跑 7 天**：裝 `server/launchd/com.dzy.bulletin.staffdual.plist`（每天 06:30 跑 `staff-dzy.js dual`）。每天結果在 `$DATA/logs/staff-dual-<日期>.json`（只有 S-xxx）。`node server/staff-dzy.js dual-status` 連續 7 天全同才印「可拆舊」；有差異就逐一查（管理系統資料不對，或舊路徑的判定表要改）。
+7. **切換**：`server/.env` 加 `STAFF_SOURCE=dzy`、重啟伺服器。mirror 每小時改成同步管理系統；管理頁不再顯示「打卡同步」按鈕；`syncClock` 回「已改由管理系統同步」；橋接讀打卡名冊走 raw，不再讀 `CLOCK_PRIMARY_`。可先 `node server/staff-dzy.js sync --dry-run` 看會做什麼。
+8. **回退**：`STAFF_SOURCE=clock`（或刪掉那行）＋重啟，立刻回到打卡同步；staff 的 `dzy` 欄留著不影響。要連名單一起回到切換前：用 `backups/staff-snapshot-*.json` 還原（`restore.js` 流程，先請 Eason 同意）。
+- 安全閥：管理系統回空名單、連不上、一輪要停用超過 max(3, 20%) 的人 → 整輪不動（`--allow-mass` 確認過才放行）；`STAFF_SOURCE=dzy` 但搬家沒通過 → 自動當 clock，並在啟動紀錄警告。
+- 拆舊（雙跑滿 7 天且切換穩定後）：移除 `CLOCK_PRIMARY_`、`syncClock`、`resolveClockRows` 與按鈕程式——這一版**沒有刪**，保留回退。

@@ -204,7 +204,7 @@ const verifyTEST = { verify: (t) => { const m = /^TEST:(.+)$/.exec(t); return m 
   const s1 = fg.store().getStaff()[0];
   eq('GAS 舊同仁表（沒有 lineHash 欄）讀出 lineHash=""', [s1.id, s1.lineHash], ['S-001', '']);
   s1.lineHash = want; const st2 = fg.store(); st2.saveStaff(s1);
-  eq('GAS 寫入後加欄、補上表頭、值在第 13 欄', [sh.maxCols, sh.data[0][12], sh.data[1][12]], [13, 'LINE 綁定（雜湊）', want]);
+  eq('GAS 寫入後加欄、補上表頭、lineHash 在第 13 欄、dzy 在第 14 欄（空白）', [sh.maxCols, sh.data[0][12], sh.data[1][12], sh.data[0][13], sh.data[1][13]], [14, 'LINE 綁定（雜湊）', want, '管理系統編號（dzy）', '']);
   fg.bumpGen();
   eq('GAS 讀回 lineHash', fg.store().getStaff()[0].lineHash, want);
   const mr = vm.runInContext('mirrorRows_', G)({ posts: [], staff: [{ id: 'S-001', name: '測試一', active: true, lineHash: want }], reads: [], log: [] }, (p) => p, {});

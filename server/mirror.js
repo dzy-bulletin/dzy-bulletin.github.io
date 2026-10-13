@@ -423,10 +423,17 @@ async function runMirror(o) {
   }
   // ---- 4. LINE 綁定刷新：與鏡像隔開——自己 try/catch、不寫 errs（讀不到就跳過）；--all 不做、空庫不做 ----
   if (!o.all && dbReady) {
-    try { res.line = await refreshLineHash({ dir, bridge, busyMs: o.busyMs }); }
+    try {
+      // STAFF_SOURCE=dzy 且搬家通過 → 名單與 LINE 綁定都由管理系統同步（server/staff-dzy.js）；否則照舊（預設 clock＝今天行為）
+      const SD = require('./staff-dzy.js'), env = o.env || process.env, dbk = J.openDb(dir, { readOnly: true, busyMs: o.busyMs });
+      let eff = 'clock'; try { eff = SD.effectiveSource(env, dbk); } finally { try { dbk.close(); } catch (e) {} }
+      res.line = eff === 'dzy'
+        ? Object.assign(await SD.runDzySync({ dir, bridge, busyMs: o.busyMs, fetchDir: o.fetchDir || (() => SD.fetchDirectory(SD.dirConfig(env))) }), { source: 'dzy' })
+        : await refreshLineHash({ dir, bridge, busyMs: o.busyMs });
+    }
     catch (e) { res.line = { ok: false, error: J.errText(e) }; }
-    J.logLine(dir, 'mirror.log', res.line.ok ? `LINE 綁定刷新：更新 ${res.line.updated} 人、已綁定 ${res.line.linked} 人` + (res.line.sourceErrors ? `（${res.line.sourceErrors} 個打卡來源讀不到，那幾店不動）` : '')
-      : 'LINE 綁定刷新跳過：' + res.line.error);
+    J.logLine(dir, 'mirror.log', res.line.ok ? (res.line.source === 'dzy' ? '同仁名單同步（管理系統）：' + JSON.stringify(res.line.changes) + `；` : '') + `LINE 綁定刷新：更新 ${res.line.updated} 人、已綁定 ${res.line.linked} 人` + (res.line.sourceErrors ? `（${res.line.sourceErrors} 個打卡來源讀不到，那幾店不動）` : '')
+      : (res.line.source === 'dzy' || /管理系統|搬家/.test(res.line.error || '') ? '同仁名單同步（管理系統）跳過：' : 'LINE 綁定刷新跳過：') + res.line.error);
   }
   // ---- 3. 附件補齊（M7）：與上面完全隔開——自己 try/catch、不寫 errs、不動 ok／pending／fails（D4）；--all 不做（沿用上一輪的 files）----
   const prevFiles = (prev && prev.files) || null;

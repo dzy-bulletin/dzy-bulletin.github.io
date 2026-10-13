@@ -3,7 +3,7 @@
 'use strict';
 
 var WRITE_ACTIONS_ = ['setPin', 'login', 'ack', 'adminLogin', 'savePost', 'setPublished', 'setPinned', 'staffAdd', 'staffDelete', 'staffResetPin', 'syncClock', 'staffSetStore', 'lineLogin'];   // 必須與 Service.WRITE_ACTIONS 一致（test 檢查）
-var VERSION_ = '0.7.4';
+var VERSION_ = '0.7.5';
 // 後端搬 Mac mini（#5、#7）：指令碼屬性 PRIMARY＝gas（現況）／mini（已切到 Mac mini）。
 // mini 時寫入一律回 MOVED、讀取照常：還沒重新整理的舊頁面能看、不能寫（避免切換期雙寫）。uploadFile 也擋（與 Mac mini 的 READONLY 同步，免得留孤兒附件）。
 // 只有寫入動作才讀 PRIMARY（讀取動作零成本、PRIMARY 沒設時與改版前完全一樣）；寫入在拿到鎖之後再確認一次（等鎖期間才切 mini 也擋得住）。
@@ -59,7 +59,7 @@ function doPost(e) {
 function clockSource_() {
   if (typeof CLOCK_SOURCES_ === 'undefined') return null;
   return {
-    read: function () {
+    read: function (opts) {
       var rows = [], errors = [], counts = {}, sources = [], missing = {};   // missing：這輪讀不到或沒有 line_user_id 欄的來源（#35 R1）
       CLOCK_SOURCES_.forEach(function (c) {
         try {
@@ -80,6 +80,8 @@ function clockSource_() {
           counts[c.label] = n; sources.push(c.src);
         } catch (e) { missing[c.src] = 1; errors.push(c.label + '：讀取失敗，請確認打卡試算表還在、名單分頁叫 roster'); console.error(c.label + ': ' + e); }
       });
+      // raw（同仁名單改讀管理系統，STAFF_SOURCE=dzy）：只交出各店名冊的原樣列（含 lineHash），不讀 CLOCK_PRIMARY_、不做跨店同名整理——主店改由管理系統的 role=home 決定
+      if (opts && opts.raw === true) return { rows: rows, errors: errors, messages: [], counts: counts, sources: sources, raw: true };
       // 跨店同名：依 Config.local.js 的 CLOCK_PRIMARY_（Eason 判定的主店）整理，規則見 js/logic.js resolveClockRows
       var labels = {}; CLOCK_SOURCES_.forEach(function (c) { labels[c.src] = c.label; });
       var prim = typeof CLOCK_PRIMARY_ === 'undefined' ? {} : CLOCK_PRIMARY_;
@@ -195,7 +197,7 @@ function bridgeCore_(req, d) {
     if (op === 'share') { d.files().share(Array.isArray(req.ids) ? req.ids.map(String) : []); return ok({}); }
     if (op === 'revoke') { d.files().revoke(Array.isArray(req.ids) ? req.ids.map(String) : []); return ok({}); }
     if (op === 'quota') return ok(d.files().quota());
-    if (op === 'clock') return ok(d.clock());
+    if (op === 'clock') return ok(d.clock(req));
     if (op === 'sig') return ok(d.files().readSigSafe(String(req.id || ''), d.store().sigIds()));   // 只讀簽名資料夾或分頁既有的簽名圖，其他回 null（#13 B1、S5）
     // 批次簽名圖（一次最多 20 張，一次橋接呼叫）：put＝上傳到簽名資料夾、依序回傳 Drive id（M3 回填 driveSigId）；
     // get＝依 Drive id 讀回 data URL（M5 搬遷批次下載）；只放行「在簽名資料夾內或已讀分頁既有」的 PNG／JPEG，其他給 null。兩者擇一。
@@ -268,7 +270,7 @@ function gasBridgeDeps_() {
     files: function () { return files || (files = makeFiles_()); },
     store: function () { return store || (store = makeStore_(files || (files = makeFiles_()))); },
     lock: function (ms) { var l = LockService.getScriptLock(); return l.tryLock(ms) ? function () { l.releaseLock(); } : null; },
-    clock: function () { var cs = clockSource_(); return cs ? cs.read() : { rows: [], errors: ['未設定打卡來源'], sources: [], counts: {} }; },
+    clock: function (req) { var cs = clockSource_(); return cs ? cs.read({ raw: !!(req && req.raw === true) }) : { rows: [], errors: ['未設定打卡來源'], sources: [], counts: {} }; },
     backup: saveBackup_
   };
 }

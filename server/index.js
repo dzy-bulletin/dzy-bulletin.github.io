@@ -10,6 +10,7 @@
  *   BODY_IDLE_MS=30000（請求體超過這麼久沒有新資料就中斷）；REQUEST_TIMEOUT_S=180（整個請求上限，含 27MB 附件經 4G 上傳）
  *   E2E=1（只在測試時開：/__seed、/__clock 等測試入口，改用假橋接）；E2E 必須明確指定非預設的 DATA_DIR，且不得設 BRIDGE_URL／BRIDGE_KEY
  *   BRIDGE_FAKE_DELAY_MS（E2E 假橋接每個動作延遲，阻塞測試用）；BRIDGE_FAKE_FAIL=1（E2E 假橋接一律失敗並回 AUTH，驗錯誤碼對應用）
+ *   STAFF_SOURCE=clock|dzy（預設 clock＝打卡同步；dzy＝同仁名單改讀管理系統，需搬家腳本通過，見 server/staff-dzy.js 與 DEPLOY.md 附錄 D）；DZY_PLATFORM_URL／BULLETIN_SVC_KEY（只給 staff-dzy.js 與 mirror 用）
  *   LINE_CHANNEL_ID=2011292256（選用；LINE 自動登入驗 ID token 用的 LINE Login 頻道 ID，預設就是鼎兆元打卡那個）
  *   LINE_LOGIN_PER_MIN=10、LINE_LOGIN_GLOBAL_PER_MIN=120（選用；lineLogin 真的要打 LINE verify 時才計數：每個來源 IP 每分鐘上限／全部加總每分鐘上限，超過回 BUSY）
  *
@@ -24,6 +25,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { effectiveSource, sourceWarning } = require('./staff-dzy.js');
 
 const ROOT = path.join(__dirname, '..');
 const MIN_NODE = 24;                                        // node:sqlite 的 DatabaseSync 不需旗標；DEPLOY.md 寫同一個數字
@@ -67,6 +69,7 @@ function config(env) {
     LINE_CHANNEL_ID: env.LINE_CHANNEL_ID || '2011292256',
     LINE_PER_MIN: Number(env.LINE_LOGIN_PER_MIN) > 0 ? Math.floor(Number(env.LINE_LOGIN_PER_MIN)) : 10,
     LINE_GLOBAL_PER_MIN: Number(env.LINE_LOGIN_GLOBAL_PER_MIN) > 0 ? Math.floor(Number(env.LINE_LOGIN_GLOBAL_PER_MIN)) : 120,
+    STAFF_SOURCE: String(env.STAFF_SOURCE || 'clock').trim().toLowerCase() === 'dzy' ? 'dzy' : 'clock',   // 同仁名單來源（預設 clock＝打卡同步）；dzy 要搬家腳本通過才生效，見 server/staff-dzy.js
     LINE_VERIFY_URL: env.LINE_VERIFY_URL || 'https://api.line.me/oauth2/v2.1/verify'   // 只給測試指到本機假 LINE
   };
 }
@@ -129,6 +132,9 @@ function makeApp(cfg) {
   let announcer = null;                                     // #28 新公告通知（main() 啟動後經 startAnnounce 掛上）
   const clock = { nowMs: () => Date.now() + clockOffsetMs, today: () => L.today(new Date(Date.now() + clockOffsetMs)) };
   const ts = () => new Date().toISOString();
+  // 同仁名單來源：STAFF_SOURCE=dzy 而且搬家腳本通過（kv 旗標）才算 dzy，否則一律 clock（今天行為）。回退＝改回 clock、重啟
+  const staffSource = () => effectiveSource(cfg, (k) => store.kvGet(k));
+  { const w = sourceWarning(cfg, (k) => store.kvGet(k)); if (w) console.error(ts() + ' ' + w); }
 
   // ---- 雲端空間：請求路徑只讀 kv 快取，背景每 10 分鐘刷新（請求永遠不碰 Google）----
   function cachedQuota() {
@@ -194,7 +200,7 @@ function makeApp(cfg) {
     for (let round = 0; round < 3; round++) {
       pre.need = null; pre.revoke = [];
       const sh = shims(pre);
-      const svc = makeService_(L, store, sh.files, auth, clock, sh.clockSrc, sh.lineVerify);
+      const svc = makeService_(L, store, sh.files, auth, clock, sh.clockSrc, sh.lineVerify, { staffSource: staffSource() });
       const out = WRITE.has(action)
         ? store.tx(() => { if (frozen()) return MOVED; store.purgeReqs(Date.now()); return svc.call(action, structuredClone(q)); })
         : svc.call(action, structuredClone(q));

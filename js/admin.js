@@ -198,8 +198,12 @@ var Admin = (function () {
         (sy.left.length ? '<br>⚠️ 打卡系統已離職、但仍在佈告欄名單（請自行決定是否刪除）：' + sy.left.map(function (x) { return esc(x.name) + '（' + L.STAFF_UNIT_NAME[x.unit] + '）'; }).join('、') : '') +
         (sy.errors.length ? '<br>❌ ' + sy.errors.map(esc).join('<br>❌ ') : '') + '</div>';
     }
-    return '<div class="panel"><h4>從打卡系統同步</h4><div class="hint" style="margin:0 0 8px">讀取小辛辣光復店、央廚、墨竹亭金山店、墨竹亭光復店、墨竹亭六張犁店、總部打卡系統的在職名單，自動加入缺少的同仁（只讀取，不會改動打卡系統）。同一人在兩家以上時，依 Eason 判定的主店只留一筆；總部同仁要先由 Eason 判定歸哪一組才會同步。小辛辣美村、南昌請手動新增。</div>' +
-      '<button class="btn ghost" id="syncBtn">↻ 從打卡系統同步</button>' + syHTML + '</div>' +
+    // G3：STAFF_SOURCE=dzy（同仁名單改讀管理系統）時沒有「打卡同步」按鈕，也沒有主店判定說明；名單由管理系統每小時同步
+    var top = a.data.staffSource === 'dzy'
+      ? '<div class="panel"><h4>同仁名單來源：管理系統</h4><div class="hint" style="margin:0">新人、離職、改名、單位調整都在「管理系統 → 同仁名單」處理，這裡每小時自動同步（不需要也沒有手動同步按鈕）。要新增管理系統以外的同仁，用下面的「新增同仁」。</div></div>'
+      : '<div class="panel"><h4>從打卡系統同步</h4><div class="hint" style="margin:0 0 8px">讀取小辛辣光復店、央廚、墨竹亭金山店、墨竹亭光復店、墨竹亭六張犁店、總部打卡系統的在職名單，自動加入缺少的同仁（只讀取，不會改動打卡系統）。同一人在兩家以上時，依 Eason 判定的主店只留一筆；總部同仁要先由 Eason 判定歸哪一組才會同步。小辛辣美村、南昌請手動新增。</div>' +
+      '<button class="btn ghost" id="syncBtn">↻ 從打卡系統同步</button>' + syHTML + '</div>';
+    return top +
       '<div class="panel"><h4>新增同仁</h4><div class="row"><input class="inp" id="sName" placeholder="姓名（全名）" maxlength="20">' +
       '<select class="inp" id="sUnit">' + L.STAFF_UNITS.map(function (u) { return '<option value="' + u.id + '">' + u.name + '</option>'; }).join('') + '</select>' +
       '<select class="inp" id="sStore"' + (L.STORES[L.STAFF_UNITS[0].id] ? '' : ' hidden') + '><option value="">選門市</option>' + L.STORES.mzt.map(function (x) { return '<option>' + x + '</option>'; }).join('') + '</select></div>' +
