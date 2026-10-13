@@ -423,17 +423,23 @@ async function runMirror(o) {
   }
   // ---- 4. LINE 綁定刷新：與鏡像隔開——自己 try/catch、不寫 errs（讀不到就跳過）；--all 不做、空庫不做 ----
   if (!o.all && dbReady) {
+    let eff = 'clock';
     try {
       // STAFF_SOURCE=dzy 且搬家通過 → 名單與 LINE 綁定都由管理系統同步（server/staff-dzy.js）；否則照舊（預設 clock＝今天行為）
       const SD = require('./staff-dzy.js'), env = o.env || process.env, dbk = J.openDb(dir, { readOnly: true, busyMs: o.busyMs });
-      let eff = 'clock'; try { eff = SD.effectiveSource(env, dbk); } finally { try { dbk.close(); } catch (e) {} }
+      try { eff = SD.effectiveSource(env, dbk); } finally { try { dbk.close(); } catch (e) {} }
       res.line = eff === 'dzy'
         ? Object.assign(await SD.runDzySync({ dir, bridge, busyMs: o.busyMs, fetchDir: o.fetchDir || (() => SD.fetchDirectory(SD.dirConfig(env))) }), { source: 'dzy' })
         : await refreshLineHash({ dir, bridge, busyMs: o.busyMs });
+      // G8：還在 clock 模式、搬家過了、今天還沒雙跑 → 順手跑一次雙跑比對（不依賴另外裝 plist；失敗只記一行、不影響鏡像）
+      if (eff === 'clock') await autoDual(o, SD, env, dir).catch(() => {});
     }
-    catch (e) { res.line = { ok: false, error: J.errText(e) }; }
-    J.logLine(dir, 'mirror.log', res.line.ok ? (res.line.source === 'dzy' ? '同仁名單同步（管理系統）：' + JSON.stringify(res.line.changes) + `；` : '') + `LINE 綁定刷新：更新 ${res.line.updated} 人、已綁定 ${res.line.linked} 人` + (res.line.sourceErrors ? `（${res.line.sourceErrors} 個打卡來源讀不到，那幾店不動）` : '')
-      : (res.line.source === 'dzy' || /管理系統|搬家/.test(res.line.error || '') ? '同仁名單同步（管理系統）跳過：' : 'LINE 綁定刷新跳過：') + res.line.error);
+    catch (e) { res.line = { ok: false, error: J.errText(e) }; if (eff === 'dzy') res.line.source = 'dzy'; }
+    const isDzy = res.line.source === 'dzy';
+    J.logLine(dir, 'mirror.log', res.line.ok ? (isDzy ? '同仁名單同步（管理系統）：' + JSON.stringify(res.line.changes) + `；略過 ${res.line.changes.skipped}、管理系統沒有的在職 ${res.line.orphans}、未掛 dzy ${res.line.unmanaged}、待人工認領 ${res.line.manual}` + ((res.line.alerts || []).length ? `；⚠ LINE 多來源不一致已鎖定 ${res.line.alerts.length} 人：` + res.line.alerts.join('、') : '') + `；` : '') + `LINE 綁定刷新：更新 ${res.line.updated} 人、已綁定 ${res.line.linked} 人` + (res.line.sourceErrors ? `（${res.line.sourceErrors} 個打卡來源讀不到，那幾店不動）` : '') + (res.line.lineSkipped ? '；⚠ ' + res.line.lineSkipped : '')
+      : (isDzy ? '同仁名單同步（管理系統）失敗：' : 'LINE 綁定刷新跳過：') + res.line.error + (isDzy && res.line.lastOkAt ? `（最後成功 ${res.line.lastOkAt}）` : ''));
+    // G11：dzy 模式下名單同步失敗＝鏡像 ok=false（連續失敗 /health 轉黃）、退出碼非 0。clock 模式的 LINE 刷新失敗維持原本「記一行、跳過」
+    if (isDzy && !res.line.ok) errs.push('同仁名單同步（管理系統）失敗：' + res.line.error);
   }
   // ---- 3. 附件補齊（M7）：與上面完全隔開——自己 try/catch、不寫 errs、不動 ok／pending／fails（D4）；--all 不做（沿用上一輪的 files）----
   const prevFiles = (prev && prev.files) || null;
@@ -458,6 +464,17 @@ async function runMirror(o) {
   if (res.skipped) J.logLine(dir, 'mirror.log', `人工略過 ${res.skipped} 筆（logs/${SKIP}）：` + res.skippedIds.join('、'));
   if (!o.all && res.files) J.logLine(dir, 'mirror.log', filesText(res.files) + (res.files.failedIds ? '；⚠ 這一輪沒補到：' + res.files.failedIds.join('、') : '') + (res.files.error ? '；' + res.files.error : ''));
   return res;
+}
+
+async function autoDual(o, SD, env, dir) {
+  const db = J.openDb(dir, { readOnly: true, busyMs: o.busyMs });
+  let migrated; try { migrated = db.prepare("SELECT v FROM kv WHERE k = ?").get(SD.MIGRATED_KEY); } finally { try { db.close(); } catch (e) {} }
+  if (!migrated) return;
+  const L = require('../js/logic.js'), last = J.readLast(dir, 'staff-dual-last.json');
+  if (last && last.date === L.today(new Date())) return;
+  const fetchDir = o.fetchDir || (() => SD.fetchDirectory(SD.dirConfig(env)));
+  try { const r = await SD.runDual({ dir, bridge: o.bridge, fetchDir, busyMs: o.busyMs }); J.logLine(dir, 'mirror.log', `雙跑比對：${r.same ? '全同' : '有差異'}（${r.date}）`); }
+  catch (e) { J.logLine(dir, 'mirror.log', '雙跑比對跳過：' + J.errText(e)); }
 }
 
 // 第 4 步：只更新同仁的 lineHash（一筆寫入交易；交易內重讀同仁，伺服器同時寫入也不會被蓋掉其他欄位）

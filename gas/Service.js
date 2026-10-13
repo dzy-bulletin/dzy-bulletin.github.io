@@ -119,8 +119,12 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify, opts) 
       if (!sub) throw err('LINE_BAD', 'LINE 登入驗證失敗，請選你的名字登入');
       var h = auth.lineHash(sub);
       var hits = store.getStaff().filter(function (s) { return s.active && s.lineHash && s.lineHash === h; });
+      var all = hits;
       if (q.staffId) hits = hits.filter(function (s) { return s.id === String(q.staffId); });
       if (!hits.length) throw err('LINE_NOT_LINKED', '這個 LINE 還沒對到佈告欄名單，請選你的名字登入');
+      // 同仁名單改讀管理系統（dzy）時，一個 LINE 不可能合法地對到兩位在職者（同一打卡編號／LINE 雜湊對兩個帳號＝資料有問題）：
+      // 一律拒絕、不讓人選，退回選名字＋密碼。舊模式（clock）維持回 choices：同一人在佈告欄有兩筆（跨單位、判定前各同步一次）是既有的合法情境
+      if (all.length > 1 && staffSource === 'dzy') throw err('LINE_AMBIGUOUS', 'LINE 登入對到不只一位同仁，請選你的名字登入');
       if (hits.length > 1) return { choices: hits.map(function (s) { return { id: s.id, name: L.maskName(s.name), unit: s.unit }; }) };
       var s = hits[0];
       return { token: auth.makeStaffToken(store.secret(), s.id, s.pinVer), me: me(s), board: boardFor(s) };

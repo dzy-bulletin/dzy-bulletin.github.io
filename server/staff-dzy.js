@@ -30,9 +30,14 @@ const SRC_OF_STORE = {}; Object.keys(STORE_OF_SRC).forEach((k) => { SRC_OF_STORE
 // 管理系統單位代碼（org unit_code）→ 佈告欄單位／門市。總部（dzy-hq）在管理系統不分三組：新人先歸總部鼎兆元、既有的維持原組別
 const UNIT_OF_DZY = {
   'mala-gf': { unit: 'mala', store: '' }, 'mzt-js': { unit: 'mzt', store: '金山' }, 'mzt-gf': { unit: 'mzt', store: '光復' },
-  'mzt-lzl': { unit: 'mzt', store: '六張犁' }, 'ck': { unit: 'cf', store: '' }, 'dzy-hq': { hq: true }
+  'mzt-lzl': { unit: 'mzt', store: '六張犁' }, 'ck': { unit: 'cf', store: '' },
+  // 總部（org 單位代碼見 dzy apps-script/platform/Staff.gs 預設資料）：墨竹亭總部／小辛辣總部對得到佈告欄的總部組別；鼎兆元總部（dzy-hq）底下分部門，
+  // 管理系統不分三組 → 既有的維持原組別、新人先歸 hq-dzy。其餘單位（mzt-wx／mzt-rg／mzt-mc／yiwu-*）佈告欄沒有對應單位，不新增、單位不動
+  'mzt-hq': { hq: true, hqUnit: 'hq-mzt' }, 'mala-hq': { hq: true, hqUnit: 'hq-mala' }, 'dzy-hq': { hq: true }
 };
-const MIGRATED_KEY = 'staff_dzy_migrated';
+const MIGRATED_KEY = 'staff_dzy_migrated';          // 已搬家（dzy 欄填好、有快照）
+const SNAP_KEY = 'staff_dzy_snapshot';               // 搬家前快照的檔名（rollback 用；已搬家後再跑 --apply 不會覆蓋它）
+const SWITCH_KEY = 'staff_dzy_switchable';          // 可切換（雙跑連續 7 天全同才由 dual 寫入，G8）
 const DUAL_NEED_DAYS = 7;
 const HASH_RE = /^[0-9a-f]{64}$/;
 const clone = (o) => JSON.parse(JSON.stringify(o));
@@ -42,22 +47,26 @@ const srcKey = (s) => String(s || '');
 
 // 管理系統回來的名單整理成內部格式。壞列丟掉並記數；同一 emp_no 出現兩次、同一個 store_code+emp_id 掛在兩個人身上 → 那把 key 不拿來對（ambiguousKeys）
 function normalizeDirectory(data) {
-  if (!Array.isArray(data)) throw bad('管理系統回傳的名單格式不符');
-  const people = [], seen = {}, dupNo = {}, owners = {}, badRows = [];
-  data.forEach((r, i) => {
+  // 平台 svcDirectory 回全部 staff（含停用）：舊格式是陣列；新格式 { staff:[…], total, generated_at }（有 total 就必須與筆數相符，G6）
+  let list = data, total = null, generatedAt = '';
+  if (data && !Array.isArray(data) && typeof data === 'object') { list = data.staff || data.people || data.rows; total = data.total; generatedAt = String(data.generated_at || ''); }
+  if (!Array.isArray(list)) throw bad('管理系統回傳的名單格式不符');
+  if (total !== null && total !== undefined && Number(total) !== list.length) throw bad(`管理系統名單筆數（${list.length}）與 total（${total}）不符，整輪中止`, 'DIR_TOTAL');
+  const people = [], seen = {}, dupNo = [], owners = {}, badRows = [];
+  list.forEach((r, i) => {
     const dzy = String(r && r.emp_no || '').trim(), name = String(r && r.name || '').trim();
     if (!dzy || !name) { badRows.push(i); return; }
-    if (seen[dzy]) { dupNo[dzy] = 1; return; }
+    if (seen[dzy]) { if (dupNo.indexOf(dzy) < 0) dupNo.push(dzy); return; }
     seen[dzy] = 1;
     const clocks = (Array.isArray(r.clocks) ? r.clocks : []).map((c) => ({ store: String(c && c.store_code || '').trim().toLowerCase(), empId: String(c && c.emp_id || '').trim(), role: String(c && c.role || '').trim() }))
       .filter((c) => c.store && c.empId);
     people.push({ dzy, name, unit: String(r.unit || '').trim(), active: r.active === true, clocks });
   });
+  if (dupNo.length) throw bad(`管理系統名單有重複的 emp_no（${dupNo.length} 個：${dupNo.slice(0, 10).join('、')}），整輪中止`, 'DIR_DUP');   // G2：不取第一筆
   people.forEach((p) => p.clocks.forEach((c) => { const k = c.store + ':' + c.empId; (owners[k] = owners[k] || []).indexOf(p.dzy) < 0 && owners[k].push(p.dzy); }));
   const ambiguousKeys = {};
   Object.keys(owners).forEach((k) => { if (owners[k].length > 1) ambiguousKeys[k] = owners[k]; });
-  Object.keys(dupNo).forEach((d) => { people.filter((p) => p.dzy === d).forEach((p) => p.clocks.forEach((c) => { ambiguousKeys[c.store + ':' + c.empId] = [d]; })); });
-  return { people, byDzy: Object.fromEntries(people.map((p) => [p.dzy, p])), owners, ambiguousKeys, badRows, dupNo: Object.keys(dupNo) };
+  return { people, byDzy: Object.fromEntries(people.map((p) => [p.dzy, p])), owners, ambiguousKeys, badRows, dupNo, total: total === null || total === undefined ? null : Number(total), generatedAt };
 }
 function bad(msg, code) { const e = new Error(msg); e.code = code || 'DIR_BAD'; return e; }
 
@@ -75,50 +84,66 @@ function nextSId(list) {
   let s = String(n + 1); while (s.length < 3) s = '0' + s; return 'S-' + s;
 }
 
-// 這個人的 LINE 雜湊應有的值：undefined＝不知道（來源讀不到／名冊沒有 line_user_id 欄／沒有任何對照），呼叫端不動
+// 這個人的 LINE 雜湊應有的值，依「來源」逐家判斷（G7）：
+//   來源讀不到（沒在 got.sources、或名冊沒有 line_user_id 欄）＝不知道，不影響其他來源的結論；
+//   來源讀得到＝該店那列在職且有綁→該雜湊，否則（沒那列、已離職、沒綁）＝已解除綁定。
+//   有綁定→取之；不同來源出現不同雜湊→conflict（鎖住自動登入：值給 ''，呼叫端告警）；
+//   全部讀得到的來源都已解除→''（不因其他來源讀不到而保留）；全部讀不到／沒有對照→undefined（不動）。
 function wantedLineHash(p, got) {
-  if (!got || !Array.isArray(got.rows) || !Array.isArray(got.sources)) return undefined;
+  const r0 = { v: undefined, conflict: false };
+  if (!got || !Array.isArray(got.rows) || !Array.isArray(got.sources)) return r0;
   const idx = {}, has = {};
   got.rows.forEach((r) => {
     if (!r) return;
     if (Object.prototype.hasOwnProperty.call(r, 'lineHash')) has[r.src] = 1;
     const k = r.src + ':' + r.empId; if (!idx[k] || (r.active && !idx[k].active)) idx[k] = r;
   });
-  const cl = p.clocks.filter((c) => SRC_OF_STORE[c.store]).sort((a, b) => (b.role === 'home') - (a.role === 'home'));
-  if (!cl.length) return undefined;
+  const cl = p.clocks.filter((c) => SRC_OF_STORE[c.store]);
   const readable = cl.filter((c) => got.sources.indexOf(SRC_OF_STORE[c.store]) >= 0 && has[SRC_OF_STORE[c.store]]);
-  for (let i = 0; i < readable.length; i++) {
-    const r = idx[SRC_OF_STORE[readable[i].store] + ':' + readable[i].empId];
-    if (r && r.active && HASH_RE.test(String(r.lineHash || ''))) return r.lineHash;
-  }
-  return readable.length === cl.length ? '' : undefined;      // 有來源讀不到：綁定可能在那邊，這輪不清空
+  if (!readable.length) return r0;
+  const hs = [];
+  readable.forEach((c) => {
+    const r = idx[SRC_OF_STORE[c.store] + ':' + c.empId];
+    if (r && r.active && HASH_RE.test(String(r.lineHash || '')) && hs.indexOf(r.lineHash) < 0) hs.push(r.lineHash);
+  });
+  if (hs.length > 1) return { v: '', conflict: true };
+  return { v: hs.length ? hs[0] : '', conflict: false };
 }
 
 // 核心：以 dzy 為鍵把名單整理成「管理系統認為的樣子」。不改傳入物件；回傳新名單與變動。notes 只有 S-xxx／DZY 編號，沒有姓名
+// 回傳另有：manual（姓名不一致、不自動認領，要人工確認：G3）、orphans（已連結 dzy 的在職帳號，其 dzy 不在管理系統名單：G6）、
+// ambiguous（一個打卡鍵對到兩個以上 DZY：G1）、dupHash（同一個非空 lineHash 會寫給兩個以上在職帳號：G1）、lineConflicts（G7）
 function dzyApply(staff, dirNorm, got, nowIso) {
   const cur = clone(staff || []), notes = [];
   const ch = { added: [], adopted: [], deactivated: [], reactivated: [], renamed: [], moved: [], srcChanged: [], lineChanged: [], skipped: [] };
+  const manual = [], lineConflicts = [];
   const amb = dirNorm.ambiguousKeys;
   const sOfDzy = (d) => { const m = cur.filter((s) => s.dzy === d); return m.filter((s) => s.active)[0] || m[0] || null; };
   const sorted = dirNorm.people.slice().sort((a, b) => (a.dzy < b.dzy ? -1 : 1));
   sorted.forEach((p) => {
     let S = sOfDzy(p.dzy);
     const m = UNIT_OF_DZY[p.unit], home = homeSrcOf(p);
-    if (!S) {                                                   // 沒有 dzy 對應：先用既有 src 認領（唯一才認），再不然才當新人
+    if (!S) {                                                   // 沒有 dzy 對應：先用既有 src 認領（唯一且姓名一致才認），再不然才當新人
       const keys = {}; p.clocks.forEach((c) => { if (!amb[c.store + ':' + c.empId]) keys[c.store + ':' + c.empId] = 1; });
       const cands = cur.filter((s) => !s.dzy && s.src && keys[clockKeyOfSrc(s.src)]);
       const act = cands.filter((s) => s.active);
       if (act.length > 1) { notes.push(p.dzy + ' 對到佈告欄 ' + act.length + ' 筆在職同仁（' + act.map((s) => s.id).join('、') + '），不認領也不新增，請處理多的那筆'); ch.skipped.push(p.dzy); return; }
-      if (act.length === 1) { S = act[0]; S.dzy = p.dzy; ch.adopted.push(S.id); }
-      else if (cands.length) { S = cands[0]; S.dzy = p.dzy; ch.adopted.push(S.id); }      // 佈告欄已刪除的同一人：只掛 dzy，不復活
+      const hit = act.length === 1 ? act[0] : cands[0];
+      if (hit) {
+        if (String(hit.name || '').trim() !== p.name) {          // G3：同一個打卡編號、名字卻不同＝可能是舊帳號被轉給新人，不自動認領（會繼承舊密碼與簽名紀錄）
+          manual.push({ id: hit.id, dzy: p.dzy }); ch.skipped.push(p.dzy);
+          notes.push(hit.id + ' 與 ' + p.dzy + ' 打卡編號相同但姓名不一致，不自動認領；確認是同一人後用 claim 指令（會清掉舊密碼與 LINE 綁定）'); return;
+        }
+        S = hit; S.dzy = p.dzy; ch.adopted.push(S.id);           // 已刪除的同一人：只掛 dzy，不復活
+      }
     }
     if (!S) {
       if (!p.active) return;
       if (!m) { notes.push(p.dzy + ' 的單位代碼不在對照表，不新增，請確認'); ch.skipped.push(p.dzy); return; }
-      const unit = m.hq ? 'hq-dzy' : m.unit, store = m.hq ? '' : m.store;
+      const unit = m.hq ? (m.hqUnit || 'hq-dzy') : m.unit, store = m.hq ? '' : m.store;
       S = { id: nextSId(cur), name: p.name, unit, pinHash: '', salt: '', pinVer: 0, fail: 0, active: true, createdAt: nowIso, deletedAt: '', src: home, store, lineHash: '', dzy: p.dzy };
       cur.push(S); ch.added.push(S.id);
-      if (m.hq) notes.push(S.id + ' 是總部新人，先歸「總部鼎兆元」，要改組請到同仁名單處理');
+      if (m.hq && !m.hqUnit) notes.push(S.id + ' 是鼎兆元總部新人，先歸「總部鼎兆元」，要改組請到同仁名單處理');
       return;
     }
     if (!p.active) {                                            // 離職停用（記下是 dzy 停的，復職時才自動恢復；主管手動刪除的不會被復活）
@@ -131,25 +156,39 @@ function dzyApply(staff, dirNorm, got, nowIso) {
     }
     if (S.name !== p.name) { S.name = p.name; ch.renamed.push(S.id); }
     if (m) {
-      const unit = m.hq ? (String(S.unit).indexOf('hq-') === 0 ? S.unit : 'hq-dzy') : m.unit, store = m.hq ? '' : m.store;
+      const unit = m.hq ? (m.hqUnit || (String(S.unit).indexOf('hq-') === 0 ? S.unit : 'hq-dzy')) : m.unit, store = m.hq ? '' : m.store;
       if (unit !== S.unit || store !== String(S.store || '')) { S.unit = unit; S.store = store; ch.moved.push(S.id); }
     } else notes.push(S.id + ' 的單位代碼不在對照表，單位不動');
     if (home && S.src !== home) { S.src = home; ch.srcChanged.push(S.id); }
   });
-  // LINE 雜湊（來源：打卡名冊 raw；在職→主店優先的綁定，離職→清空）
+  // LINE 雜湊（來源：打卡名冊 raw；在職→依來源撤銷規則，離職→清空）
   cur.forEach((S) => {
     const p = S.dzy && dirNorm.byDzy[S.dzy];
     if (!p) return;
-    const want = S.active ? wantedLineHash(p, got) : '';
+    let want;
+    if (!S.active) want = '';
+    else { const w = wantedLineHash(p, got); want = w.v; if (w.conflict) lineConflicts.push(S.id); }
     if (want === undefined) return;
     const old = S.lineHash || '';
-    if (old !== want) { S.lineHash = want; if (old) S.pinVer = (Number(S.pinVer) || 0) + 1; ch.lineChanged.push(S.id); }   // 解綁／改綁：pinVer+1 踢掉舊登入（同 L.lineHashUpdates）
+    if (old !== want) { S.lineHash = want; if (old) S.pinVer = (Number(S.pinVer) || 0) + 1; ch.lineChanged.push(S.id); }   // 解綁／改綁／鎖定：pinVer+1 踢掉舊登入
   });
   const before = {}; (staff || []).forEach((s) => { before[s.id] = JSON.stringify(s); });
   const changed = cur.filter((s) => before[s.id] !== JSON.stringify(s)).map((s) => s.id);
   const orphans = cur.filter((s) => s.active && s.dzy && !dirNorm.byDzy[s.dzy]).map((s) => s.id);
   const unmanaged = cur.filter((s) => s.active && !s.dzy).map((s) => s.id);
-  return { staff: cur, changed, ch, notes, orphans, unmanaged };
+  const hashOwners = {}; cur.forEach((s) => { if (s.active && s.lineHash) (hashOwners[s.lineHash] = hashOwners[s.lineHash] || []).push(s.id); });
+  const dupHash = []; Object.keys(hashOwners).forEach((h) => { if (hashOwners[h].length > 1) hashOwners[h].forEach((id) => dupHash.push(id)); });
+  const ambiguous = Object.keys(amb).map((k) => amb[k].join('/'));
+  return { staff: cur, changed, ch, notes, orphans, unmanaged, manual, dupHash, ambiguous, lineConflicts };
+}
+
+// 一輪「整輪拒寫」的條件（G1／G6）：打卡鍵歧義、同一個 lineHash 寫給兩個在職帳號、已連結 dzy 的在職帳號不在管理系統名單。回傳中文原因或 ''
+function roundProblem(r) {
+  const out = [];
+  if (r.ambiguous.length) out.push(`${r.ambiguous.length} 個打卡編號對到兩個以上管理系統帳號（${r.ambiguous.slice(0, 5).join('、')}）`);
+  if (r.dupHash.length) out.push(`同一個 LINE 綁定會寫給 ${r.dupHash.length} 個在職帳號（${r.dupHash.slice(0, 6).join('、')}）`);
+  if (r.orphans.length) out.push(`${r.orphans.length} 個已連結管理系統的在職帳號不在名單裡（${r.orphans.slice(0, 6).join('、')}）`);
+  return out.length ? '整輪不寫入：' + out.join('；') : '';
 }
 
 // 大量停用煞車：一輪要停用的人超過 max(3, 在職且已掛 dzy 的 20%) 就不做（管理系統誤把一堆人設離職時不讓佈告欄跟著崩）
@@ -169,7 +208,7 @@ function compareStaff(oldStaff, newStaff) {
     out.compared++;
     if (!!o[id].active !== !!n[id].active) out.active.push(id);
     if (o[id].active && n[id].active && (o[id].unit !== n[id].unit || String(o[id].store || '') !== String(n[id].store || ''))) out.home.push(id);
-    if ((o[id].lineHash || '') !== (n[id].lineHash || '')) out.hash.push(id);
+    if (o[id].active && n[id].active && (o[id].lineHash || '') !== (n[id].lineHash || '')) out.hash.push(id);   // #30：已刪除的人不比雜湊
   });
   out.same = !(out.onlyNew.length || out.onlyOld.length || out.active.length || out.home.length || out.hash.length);
   return out;
@@ -238,42 +277,58 @@ function saveChanged(db, newStaff, ids) {
   const up = db.prepare('INSERT INTO staff (id, json) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET json = excluded.json');
   ids.forEach((id) => { const s = newStaff.find((x) => x.id === id); if (s) up.run(s.id, JSON.stringify(s)); });
 }
-// 目前實際採用的來源：環境變數說 dzy、而且搬家腳本通過過（kv 有旗標）才算 dzy；否則 clock（安全預設）
+// 目前實際採用的來源：環境變數說 dzy、而且「已搬家」「可切換」兩個旗標都在（G8：搬家腳本通過＋雙跑連續 7 天全同）才算 dzy；否則 clock（安全預設）
 function effectiveSource(env, dbOrKv) {
   const want = String(env.STAFF_SOURCE || 'clock').trim().toLowerCase();
   if (want !== 'dzy') return 'clock';
-  let flag = null; try { flag = typeof dbOrKv === 'function' ? dbOrKv(MIGRATED_KEY) : kvGet(dbOrKv, MIGRATED_KEY); } catch (e) {}
-  return flag ? 'dzy' : 'clock';
+  const get = (k) => { try { return typeof dbOrKv === 'function' ? dbOrKv(k) : kvGet(dbOrKv, k); } catch (e) { return null; } };
+  return get(MIGRATED_KEY) && get(SWITCH_KEY) ? 'dzy' : 'clock';
 }
 function sourceWarning(env, dbOrKv) {
   return String(env.STAFF_SOURCE || '').trim().toLowerCase() === 'dzy' && effectiveSource(env, dbOrKv) !== 'dzy'
-    ? 'STAFF_SOURCE=dzy 但搬家腳本還沒通過（node server/staff-dzy.js migrate --apply），先照打卡同步（clock）運作' : '';
+    ? 'STAFF_SOURCE=dzy 但還不能切換（要先 migrate --apply，再雙跑連續 7 天全同由 dual 寫入「可切換」旗標），先照打卡同步（clock）運作' : '';
 }
 const brief = (ch) => ({ added: ch.added.length, adopted: ch.adopted.length, deactivated: ch.deactivated.length, reactivated: ch.reactivated.length, renamed: ch.renamed.length, moved: ch.moved.length, srcChanged: ch.srcChanged.length, lineChanged: ch.lineChanged.length, skipped: ch.skipped.length });
 
 // ================= G1：dzy 同步（mirror.js 第 4 步在 STAFF_SOURCE=dzy 時呼叫；也可手動） =================
-// o: { dir, bridge, fetchDir()→normalized, now(ISO), busyMs, allowMass, dryRun }。讀不到管理系統＝整輪不動（不會誤停用）；讀不到打卡名冊＝只不動 LINE 雜湊
+const LASTFILE = 'staff-dzy-last.json';
+// 橋接回的打卡名單必須是 raw 模式（GAS v0.7.5）；舊版 GAS 會忽略 raw 回判定表整理過的列（#32）
+async function readRawClock(bridge) {
+  try {
+    const got = await bridge.call('clock', { raw: true }, 90);
+    if (!got || !Array.isArray(got.rows) || !Array.isArray(got.sources)) return { got: null, err: '打卡名單格式不符' };
+    if (got.raw !== true) return { got: null, err: '橋接回應不是 raw 模式（Apps Script 還沒部署 v0.7.5），不使用' };
+    return { got, err: '' };
+  } catch (e) { return { got: null, err: '讀打卡名單失敗：' + J.errText(e) }; }
+}
+function recordLast(dir, res) {                              // G11：記最後成功時間；失敗保留上次成功的時間與這次的原因
+  const prev = J.readLast(dir, LASTFILE) || {}, at = new Date().toISOString();
+  J.writeLast(dir, LASTFILE, { lastOkAt: res.ok ? at : (prev.lastOkAt || ''), lastTryAt: at, ok: !!res.ok, error: res.ok ? '' : String(res.error || '') });
+  res.lastOkAt = res.ok ? at : (prev.lastOkAt || '');
+  return res;
+}
+// o: { dir, bridge, fetchDir()→normalized, now(→Date), busyMs, allowMass, dryRun, force }。
+// 管理系統讀不到／空名單／歧義／lineHash 重複／已連結者缺列＝整輪不動且 ok:false（mirror 會跟著 ok=false、退出碼非 0）；讀不到打卡名冊＝只不動 LINE 雜湊
 async function runDzySync(o) {
+  const fin = (r) => (o.dryRun ? r : recordLast(o.dir, r));
   let dirN;
-  try { dirN = await o.fetchDir(); } catch (e) { return { ok: false, error: J.errText(e) }; }
-  if (!dirN.people.length) return { ok: false, error: '管理系統回傳的名單是空的，整輪不動' };
-  let got = null, lineErr = '';
-  try { got = await o.bridge.call('clock', { raw: true }, 90); if (!got || !Array.isArray(got.rows) || !Array.isArray(got.sources)) { got = null; lineErr = '打卡名單格式不符'; } }
-  catch (e) { lineErr = '讀打卡名單失敗：' + J.errText(e); }
+  try { dirN = await o.fetchDir(); } catch (e) { return fin({ ok: false, error: J.errText(e) }); }
+  if (!dirN.people.length) return fin({ ok: false, error: '管理系統回傳的名單是空的，整輪不動' });
+  const { got, err: lineErr } = await readRawClock(o.bridge);
   const db = J.openDb(o.dir, { busyMs: o.busyMs });
   try {
     db.exec('BEGIN IMMEDIATE');
     try {
-      if (!kvGet(db, MIGRATED_KEY) && !o.force) { db.exec('ROLLBACK'); return { ok: false, error: '搬家腳本還沒通過（kv ' + MIGRATED_KEY + ' 沒有），不同步' }; }
+      if (!o.force && !(kvGet(db, MIGRATED_KEY) && kvGet(db, SWITCH_KEY))) { db.exec('ROLLBACK'); return fin({ ok: false, error: '還不能切換（沒有「已搬家」＋「可切換」旗標），不同步' }); }
       const staff = readStaff(db), nowIso = (o.now ? o.now() : new Date()).toISOString();
-      const r = dzyApply(staff, dirN, got, nowIso), mp = o.allowMass ? '' : massProblem(staff, r.ch);
-      if (mp) { db.exec('ROLLBACK'); return { ok: false, error: mp, planned: brief(r.ch) }; }
-      if (o.dryRun) { db.exec('ROLLBACK'); return { ok: true, dryRun: true, changes: brief(r.ch), notes: r.notes, orphans: r.orphans.length, unmanaged: r.unmanaged.length }; }
+      const r = dzyApply(staff, dirN, got, nowIso), rp = roundProblem(r), mp = o.allowMass ? '' : massProblem(staff, r.ch);
+      if (rp || mp) { db.exec('ROLLBACK'); return fin({ ok: false, error: rp || mp, planned: brief(r.ch), orphans: r.orphans.length }); }
+      if (o.dryRun) { db.exec('ROLLBACK'); return { ok: true, dryRun: true, changes: brief(r.ch), notes: r.notes, orphans: 0, unmanaged: r.unmanaged.length, manual: r.manual.length, alerts: r.lineConflicts, lineSkipped: lineErr || undefined }; }
       saveChanged(db, r.staff, r.changed);
       db.exec('COMMIT');
       const c = brief(r.ch);
-      return { ok: true, updated: r.changed.length, linked: r.staff.filter((s) => s.active && s.lineHash).length, sourceErrors: Array.isArray(got && got.errors) ? got.errors.length : 0,
-        changes: c, notes: r.notes, orphans: r.orphans.length, unmanaged: r.unmanaged.length, lineSkipped: lineErr || undefined };
+      return fin({ ok: true, updated: r.changed.length, linked: r.staff.filter((s) => s.active && s.lineHash).length, sourceErrors: Array.isArray(got && got.errors) ? got.errors.length : 0,
+        changes: c, notes: r.notes, orphans: 0, unmanaged: r.unmanaged.length, manual: r.manual.length, manualIds: r.manual.map((x) => x.id), alerts: r.lineConflicts, lineSkipped: lineErr || undefined });
     } catch (e) { try { db.exec('ROLLBACK'); } catch (y) {} throw e; }
   } finally { try { db.close(); } catch (e) {} }
 }
@@ -298,19 +353,75 @@ async function runMigrate(o) {
       }
       // 先存快照（回退用）：整張 staff 表原樣，存在資料夾 backups/，再寫 dzy
       const snapDir = path.join(o.dir, 'backups'); fs.mkdirSync(snapDir, { recursive: true });
-      const snapFile = path.join(snapDir, snapshotName(o.now)); fs.writeFileSync(snapFile, JSON.stringify(staff), { mode: 0o600 });
-      const up = db.prepare('UPDATE staff SET json = ? WHERE id = ?'); let filled = 0;
+      let snapName = kvGet(db, SNAP_KEY);                                        // 已經搬過家：保留最早那份（切換前的原樣），不覆蓋
+      if (!snapName || !fs.existsSync(path.join(snapDir, snapName))) {
+        snapName = snapshotName(o.now); fs.writeFileSync(path.join(snapDir, snapName), JSON.stringify(staff), { mode: 0o600 }); kvSet(db, SNAP_KEY, snapName);
+      }
+      const snapFile = path.join(snapDir, snapName);
+      const up = db.prepare('UPDATE staff SET json = ? WHERE id = ?'); let filled = 0, cleared = 0;
       rep.items.forEach((it) => {
         if (it.status !== 'unique' || !it.dzy) return;
         const s = staff.find((x) => x.id === it.id); if (s.dzy === it.dzy) return;
-        s.dzy = it.dzy; up.run(JSON.stringify(s), s.id); filled++;
+        s.dzy = it.dzy;
+        if (it.nameDiff) { clearCredentials(s); cleared++; }                     // G3：姓名不一致、人工確認後才認領＝不繼承舊密碼與 LINE 綁定
+        up.run(JSON.stringify(s), s.id); filled++;
       });
       kvSet(db, MIGRATED_KEY, (o.now || new Date()).toISOString());
       db.exec('COMMIT');
-      Object.assign(res, { applied: true, filled, snapshot: path.basename(snapFile) });
+      Object.assign(res, { applied: true, filled, credsCleared: cleared, snapshot: path.basename(snapFile) });
       return res;
     } catch (e) { try { db.exec('ROLLBACK'); } catch (y) {} throw e; }
   } finally { try { db.close(); } catch (e) {} }
+}
+// G3：人工確認認領時清掉舊帳號的憑證：密碼、LINE 綁定都清，pinVer+1 讓已登入的手機失效
+function clearCredentials(s) { s.pinHash = ''; s.salt = ''; s.fail = 0; s.lineHash = ''; s.pinVer = (Number(s.pinVer) || 0) + 1; }
+// 人工認領：S-xxx 與 DZY 編號由人確認是同一人（姓名不一致時 dzyApply 不會自動認領）。o: { dir, fetchDir, id, dzy }
+async function runClaim(o) {
+  const dirN = await o.fetchDir();
+  if (!dirN.byDzy[o.dzy]) return { ok: false, error: '管理系統名單沒有 ' + o.dzy };
+  const db = J.openDb(o.dir, { busyMs: o.busyMs });
+  try {
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      const staff = readStaff(db), s = staff.find((x) => x.id === o.id);
+      if (!s) { db.exec('ROLLBACK'); return { ok: false, error: '找不到 ' + o.id }; }
+      if (s.dzy) { db.exec('ROLLBACK'); return { ok: false, error: o.id + ' 已經掛了 ' + s.dzy }; }
+      const other = staff.find((x) => x.dzy === o.dzy && x.active);
+      if (other) { db.exec('ROLLBACK'); return { ok: false, error: o.dzy + ' 已經被 ' + other.id + ' 使用' }; }
+      s.dzy = o.dzy; clearCredentials(s);
+      db.prepare('UPDATE staff SET json = ? WHERE id = ?').run(JSON.stringify(s), s.id);
+      db.exec('COMMIT');
+      return { ok: true, id: s.id, dzy: o.dzy, credsCleared: true };
+    } catch (e) { try { db.exec('ROLLBACK'); } catch (y) {} throw e; }
+  } finally { try { db.close(); } catch (e) {} }
+}
+
+// G12：回退。把搬家前快照裡的每一筆同仁資料（姓名、單位、門市、在職、src…）恢復成搬家前的樣子，但**保留現有的密碼**（不把已改過的舊密碼救回來）；
+// 快照之後才新增的同仁保留（他們可能已簽過公告）；清掉兩個旗標；**所有**同仁 pinVer+1（已登入的手機全部重新登入）。
+// 呼叫端還要把 STAFF_SOURCE 改回 clock 並重啟。o: { dir, snapshot(檔名，預設搬家時記下的那份), busyMs }
+function runRollback(o) {
+  const release = J.takeLock(o.dir, 'mirror');
+  if (!release) return { ok: false, error: '另一輪鏡像正在跑，請稍後再執行 rollback' };
+  const db = J.openDb(o.dir, { busyMs: o.busyMs });
+  try {
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      const name = o.snapshot || kvGet(db, SNAP_KEY);
+      const file = name && path.join(o.dir, 'backups', path.basename(name));
+      if (!file || !fs.existsSync(file)) { db.exec('ROLLBACK'); return { ok: false, error: '找不到搬家前快照（backups/staff-snapshot-*.json），沒有動任何資料' }; }
+      const snap = JSON.parse(fs.readFileSync(file, 'utf8')), cur = readStaff(db), byId = {}; snap.forEach((x) => { byId[x.id] = x; });
+      const up = db.prepare('UPDATE staff SET json = ? WHERE id = ?'); let restored = 0;
+      cur.forEach((c) => {
+        let n = c;
+        if (byId[c.id]) { n = Object.assign({}, byId[c.id], { pinHash: c.pinHash, salt: c.salt, fail: c.fail, pinVer: c.pinVer }); delete n.offBy; restored++; }
+        n.pinVer = (Number(n.pinVer) || 0) + 1;
+        up.run(JSON.stringify(n), n.id);
+      });
+      db.prepare('DELETE FROM kv WHERE k IN (?, ?)').run(MIGRATED_KEY, SWITCH_KEY);
+      db.exec('COMMIT');
+      return { ok: true, snapshot: path.basename(file), restored, total: cur.length, pinVerBumped: cur.length };
+    } catch (e) { try { db.exec('ROLLBACK'); } catch (y) {} throw e; }
+  } finally { try { db.close(); } catch (e) {} release(); }
 }
 function loadOverrides(file) {
   const m = JSON.parse(fs.readFileSync(file, 'utf8')), out = {};
@@ -322,20 +433,21 @@ function loadOverrides(file) {
 // 新路徑「如果現在就切」會算出的名單 vs 今天佈告欄實際的名單；只讀、不寫 staff。結果寫 logs/staff-dual-<日期>.json 與 staff-dual-last.json
 async function runDual(o) {
   const dirN = await o.fetchDir();
-  let got = null, lineErr = '';
-  try { got = await o.bridge.call('clock', { raw: true }, 90); if (!got || !Array.isArray(got.rows) || !Array.isArray(got.sources)) { got = null; lineErr = '打卡名單格式不符'; } }
-  catch (e) { lineErr = '讀打卡名單失敗：' + J.errText(e); }
+  const { got, err: lineErr } = await readRawClock(o.bridge);
   const db = J.openDb(o.dir, { readOnly: true });
   let staff; try { staff = readStaff(db); } finally { try { db.close(); } catch (e) {} }
   const now = o.now ? o.now() : new Date(), date = L.today(now);
-  const plan = dzyApply(staff, dirN, got, now.toISOString()), cmp = compareStaff(staff, plan.staff);
-  // 雜湊沒比到（打卡名冊讀不到）＝不能算「全同」
-  const res = { at: now.toISOString(), date, ok: !lineErr, same: cmp.same && !lineErr, lineSkipped: lineErr || undefined, compared: cmp.compared,
+  const plan = dzyApply(staff, dirN, got, now.toISOString()), cmp = compareStaff(staff, plan.staff), problem = roundProblem(plan);
+  // 雜湊沒比到（打卡名冊讀不到／不是 raw）、或新路徑這輪會被拒寫（歧義、lineHash 重複、已連結者缺列）＝不能算「全同」
+  const res = { at: now.toISOString(), date, ok: !lineErr, same: cmp.same && !lineErr && !problem, lineSkipped: lineErr || undefined, problem: problem || undefined, compared: cmp.compared,
     counts: { onlyNew: cmp.onlyNew.length, onlyOld: cmp.onlyOld.length, active: cmp.active.length, home: cmp.home.length, hash: cmp.hash.length },
-    ids: { onlyNew: cmp.onlyNew, onlyOld: cmp.onlyOld, active: cmp.active, home: cmp.home, hash: cmp.hash }, notes: plan.notes, unmanaged: plan.unmanaged.length };
+    ids: { onlyNew: cmp.onlyNew, onlyOld: cmp.onlyOld, active: cmp.active, home: cmp.home, hash: cmp.hash }, notes: plan.notes, unmanaged: plan.unmanaged.length, manual: plan.manual.map((x) => x.id) };
   if (!o.noWrite) {
     J.writeLast(o.dir, 'staff-dual-' + date + '.json', res); J.writeLast(o.dir, 'staff-dual-last.json', res);
-    J.logLine(o.dir, 'staff-dual.log', `${date} 雙跑比對：${res.same ? '全同' : '有差異'}｜比對 ${res.compared} 筆｜新路徑多 ${res.counts.onlyNew}、舊路徑多 ${res.counts.onlyOld}、在職不同 ${res.counts.active}、主店不同 ${res.counts.home}、LINE 不同 ${res.counts.hash}` + (lineErr ? '｜' + lineErr : ''));
+    J.logLine(o.dir, 'staff-dual.log', `${date} 雙跑比對：${res.same ? '全同' : '有差異'}｜比對 ${res.compared} 筆｜新路徑多 ${res.counts.onlyNew}、舊路徑多 ${res.counts.onlyOld}、在職不同 ${res.counts.active}、主店不同 ${res.counts.home}、LINE 不同 ${res.counts.hash}` + (lineErr ? '｜' + lineErr : '') + (problem ? '｜' + problem : ''));
+    // G8：只有連續 7 天全同（dualStatus.canRetire）才寫「可切換」旗標；沒搬家過不寫；這裡只會寫入、不會清除（已切換期間不能因為某天有差異就讓服務自己退回 clock）
+    const dbw = J.openDb(o.dir, { busyMs: o.busyMs });
+    try { if (kvGet(dbw, MIGRATED_KEY) && dualStatus(o.dir, now).canRetire) { kvSet(dbw, SWITCH_KEY, now.toISOString()); res.switchable = true; } } finally { try { dbw.close(); } catch (e) {} }
   }
   return res;
 }
@@ -378,6 +490,8 @@ async function main() {
     console.log(`${r.date} 雙跑比對：${r.same ? '全同' : '有差異'}｜比對 ${r.compared} 筆｜新路徑多 ${r.counts.onlyNew}、舊路徑多 ${r.counts.onlyOld}、在職不同 ${r.counts.active}、主店不同 ${r.counts.home}、LINE 不同 ${r.counts.hash}`);
     ['onlyNew', 'onlyOld', 'active', 'home', 'hash'].forEach((k) => { if (r.ids[k].length) console.log(`  ${k}：` + r.ids[k].join('、')); });
     if (r.lineSkipped) console.log('⚠ ' + r.lineSkipped + '（這天不算全同）');
+    if (r.problem) console.log('⚠ ' + r.problem);
+    if (r.switchable) console.log('★ 連續 7 天全同，已寫入「可切換」旗標');
     process.exit(r.same ? 0 : 1);
   } else if (cmd === 'dual-status') {
     const s = dualStatus(dir);
@@ -387,10 +501,20 @@ async function main() {
     const r = await runDzySync({ dir, bridge, fetchDir, allowMass: has('--allow-mass'), dryRun: has('--dry-run') });
     console.log(r.ok ? `同步${r.dryRun ? '（試跑，沒寫入）' : '完成'}：` + JSON.stringify(r.changes) + `｜管理系統沒有的在職 ${r.orphans} 人、未掛 dzy 的在職 ${r.unmanaged} 人` : '✗ ' + r.error);
     (r.notes || []).forEach((n) => console.log('  ' + n));
+    if (r.manual) console.log(`  需人工認領 ${r.manual} 筆（姓名不一致）：` + (r.manualIds || []).join('、'));
+    (r.alerts || []).length && console.log('  ⚠ 多來源 LINE 綁定不同、已鎖定自動登入：' + r.alerts.join('、'));
     process.exit(r.ok ? 0 : 1);
-  } else { console.log('用法：node server/staff-dzy.js migrate [--apply] [--map 檔.json] [--allow-name-diff] | dual | dual-status | sync [--dry-run] [--allow-mass]'); process.exit(2); }
+  } else if (cmd === 'claim') {
+    const r = await runClaim({ dir, fetchDir, id: process.argv[3], dzy: process.argv[4] });
+    console.log(r.ok ? `已認領：${r.id} → ${r.dzy}（舊密碼與 LINE 綁定已清除，同仁要重設密碼）` : '✗ ' + r.error);
+    process.exit(r.ok ? 0 : 1);
+  } else if (cmd === 'rollback') {
+    const r = runRollback({ dir, snapshot: arg('--snapshot') });
+    console.log(r.ok ? `已回退：恢復快照 ${r.snapshot} 的 ${r.restored} 筆、清除「已搬家」「可切換」旗標、全部 ${r.pinVerBumped} 筆 pinVer+1。請把 server/.env 的 STAFF_SOURCE 改回 clock（或刪掉）並重啟伺服器` : '✗ ' + r.error);
+    process.exit(r.ok ? 0 : 1);
+  } else { console.log('用法：node server/staff-dzy.js claim S-xxx DZYxxx | rollback [--snapshot 檔名] | node server/staff-dzy.js migrate [--apply] [--map 檔.json] [--allow-name-diff] | dual | dual-status | sync [--dry-run] [--allow-mass]'); process.exit(2); }
 }
 if (require.main === module) main().catch((e) => { console.error('✗ ' + (e && e.message || e)); process.exit(1); });
 
-module.exports = { STORE_OF_SRC, SRC_OF_STORE, UNIT_OF_DZY, MIGRATED_KEY, DUAL_NEED_DAYS, normalizeDirectory, dzyApply, compareStaff, classifyMigration, massProblem, wantedLineHash,
+module.exports = { SWITCH_KEY, SNAP_KEY, roundProblem, runClaim, runRollback, clearCredentials, readRawClock, STORE_OF_SRC, SRC_OF_STORE, UNIT_OF_DZY, MIGRATED_KEY, DUAL_NEED_DAYS, normalizeDirectory, dzyApply, compareStaff, classifyMigration, massProblem, wantedLineHash,
   clockKeyOfSrc, homeSrcOf, dirConfig, fetchDirectory, effectiveSource, sourceWarning, runDzySync, runMigrate, runDual, dualStatus, loadOverrides };

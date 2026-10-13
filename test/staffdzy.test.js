@@ -7,7 +7,7 @@ const L = require('../js/logic.js');
 const { makeAuth_ } = require('../gas/Auth.js');
 const { makeService_ } = require('../gas/Service.js');
 const { makeSqliteStore } = require('../server/store-sqlite.js');
-const { runMirror } = require('../server/mirror.js');
+const { runMirror, exitCode } = require('../server/mirror.js');
 const SD = require('../server/staff-dzy.js');
 const { makeFakeGas } = require('./fake-gas.js');
 
@@ -32,7 +32,7 @@ const S0 = (id, name, unit, extra) => Object.assign({ id, name, unit, pinHash: '
 const P = (dzy, name, unit, active, clocks) => ({ emp_no: dzy, name, unit, unit_name: unit, active, clocks: (clocks || []).map((c) => ({ store_code: c[0], emp_id: c[1], role: c[2] || 'home' })) });
 const N = (list) => SD.normalizeDirectory(list);
 const R = (src, empId, name, extra) => Object.assign({ src, unit: 'mala', store: '', empId, name, active: true, lineHash: '' }, extra || {});
-const GOT = (rows, sources) => ({ rows, sources: sources || ['gf', 'js', 'mgf', 'cf', 'hq', 'lzl'], errors: [], counts: {}, messages: [] });
+const GOT = (rows, sources) => ({ raw: true, rows, sources: sources || ['gf', 'js', 'mgf', 'cf', 'hq', 'lzl'], errors: [], counts: {}, messages: [] });
 const by = (r, id) => r.staff.find((s) => s.id === id);
 
 // ---------- 0. store_code 對照（寫死並測試）----------
@@ -40,15 +40,21 @@ eq('對照：佈告欄來源代號 → 管理系統 store_code', SD.STORE_OF_SRC
 eq('對照：反向查表一一對應', Object.keys(SD.STORE_OF_SRC).every((k) => SD.SRC_OF_STORE[SD.STORE_OF_SRC[k]] === k) && Object.keys(SD.SRC_OF_STORE).length === 6, true);
 eq('對照：管理系統六家店 gf／mztjs／mztgf／mztlzl／hq／cf 都有對到', ['gf', 'mztjs', 'mztgf', 'mztlzl', 'hq', 'cf'].map((s) => !!SD.SRC_OF_STORE[s]), [true, true, true, true, true, true]);
 eq('對照：clockKeyOfSrc', [SD.clockKeyOfSrc('js:J1'), SD.clockKeyOfSrc('mgf:G01'), SD.clockKeyOfSrc('xx:1'), SD.clockKeyOfSrc(''), SD.clockKeyOfSrc('gf:')], ['mztjs:J1', 'mztgf:G01', '', '', '']);
-eq('對照：單位代碼', Object.keys(SD.UNIT_OF_DZY).sort(), ['ck', 'dzy-hq', 'mala-gf', 'mzt-gf', 'mzt-js', 'mzt-lzl']);
+eq('對照：單位代碼', Object.keys(SD.UNIT_OF_DZY).sort(), ['ck', 'dzy-hq', 'mala-gf', 'mala-hq', 'mzt-gf', 'mzt-hq', 'mzt-js', 'mzt-lzl']);
 
 // ---------- 1. normalizeDirectory ----------
 { const d = N([P('DZY001', '測試甲', 'mala-gf', true, [['gf', 'A1']]), P('DZY002', '測試乙', 'mala-gf', true, [['gf', 'A1']]), P('DZY003', '', 'mala-gf', true), { emp_no: '', name: 'x' },
-    P('DZY004', '測試丁', 'ck', true, [['cf', 'C1'], ['', 'x']]), P('DZY004', '重複編號', 'ck', true, [['cf', 'C9']])]);
-  eq('目錄：壞列丟掉（2 列）、重複 emp_no 只留第一筆', [d.people.length, d.badRows.length, d.dupNo], [3, 2, ['DZY004']]);
-  eq('目錄：同一打卡鍵掛在兩人身上＝不拿來對', Object.keys(d.ambiguousKeys).sort(), ['cf:C1', 'gf:A1']);
+    P('DZY004', '測試丁', 'ck', true, [['cf', 'C1'], ['', 'x']])]);
+  eq('目錄：壞列丟掉（2 列）', [d.people.length, d.badRows.length, d.dupNo], [3, 2, []]);
+  eq('目錄：同一打卡鍵掛在兩人身上＝不拿來對', Object.keys(d.ambiguousKeys).sort(), ['gf:A1']);
   eq('目錄：空的 store／emp_id 的 clock 丟掉', d.byDzy.DZY004.clocks.length, 1);
-  let e = null; try { N({ x: 1 }); } catch (x) { e = x.code; } eq('目錄：不是陣列→丟錯 DIR_BAD', e, 'DIR_BAD'); }
+  let e = null; try { N({ x: 1 }); } catch (x) { e = x.code; } eq('目錄：不是陣列→丟錯 DIR_BAD', e, 'DIR_BAD');
+  e = null; try { N([P('DZY004', '甲', 'ck', true), P('DZY004', '乙', 'ck', true)]); } catch (x) { e = x.code; }
+  eq('G2 目錄：重複 emp_no→整輪中止（DIR_DUP），不取第一筆', e, 'DIR_DUP');
+  const nz = N({ staff: [P('DZY001', '甲', 'ck', true), P('DZY002', '乙', 'ck', false)], total: 2, generated_at: '2026-10-13 06:00:00' });
+  eq('G6 目錄：新格式 {staff,total,generated_at}（含停用）可讀', [nz.people.length, nz.total, nz.generatedAt, nz.people[1].active], [2, 2, '2026-10-13 06:00:00', false]);
+  e = null; try { N({ staff: [P('DZY001', '甲', 'ck', true)], total: 2 }); } catch (x) { e = x.code; }
+  eq('G6 目錄：筆數與 total 不符→失敗（DIR_TOTAL）', e, 'DIR_TOTAL'); }
 
 // ---------- 2. G1 dzyApply：新增／停用／復職／改名／單位／主店 ----------
 { const staff = [S0('S-001', '舊名字', 'mala', { src: 'gf:A1', dzy: 'DZY001' }), S0('S-002', '測試乙', 'mzt', { src: 'js:J1', store: '金山', dzy: 'DZY002' }), S0('S-003', '測試丙', 'mala', { src: 'gf:A3', dzy: 'DZY003' }),
@@ -104,12 +110,19 @@ eq('對照：單位代碼', Object.keys(SD.UNIT_OF_DZY).sort(), ['ck', 'dzy-hq',
   eq('LINE：主店沒綁、另一店綁了→取另一店（同舊路徑的合併）；換綁 pinVer+1', [by(r, 'S-002').lineHash, by(r, 'S-002').pinVer], [H2, 3]);
   eq('LINE：打卡解綁→清空並 pinVer+1（踢掉舊登入）', [by(r, 'S-003').lineHash, by(r, 'S-003').pinVer], ['', 6]);
   eq('LINE：打卡名冊裡已離職的列不算綁定；從沒綁→綁上不 bump', [by(r, 'S-004').lineHash, by(r, 'S-004').pinVer], ['', 0]);
-  const g2 = GOT([R('gf', 'A1', '測試甲', { lineHash: H1 })], ['js']);       // gf 這輪讀不到
-  eq('LINE：來源讀不到→不動（不清空、不 bump）', [SD.dzyApply(staff, dir, g2, NOW).staff.map((s) => s.lineHash + '|' + s.pinVer)], [staff.map((s) => s.lineHash + '|' + s.pinVer)]);
+  const g2 = GOT([R('gf', 'A1', '測試甲', { lineHash: H1 }), R('js', 'J9', '別人')], ['js']);       // gf 這輪讀不到
+  eq('LINE：整個來源都讀不到→不動（不清空、不 bump）', SD.dzyApply(staff, dir, g2, NOW).staff.filter((s) => s.id !== 'S-002').map((s) => s.lineHash + '|' + s.pinVer), staff.filter((s) => s.id !== 'S-002').map((s) => s.lineHash + '|' + s.pinVer));
   const g3 = GOT([{ src: 'gf', empId: 'A3', name: 'x', active: true }, R('gf', 'A1', 'x', { lineHash: H2 })]);   // A3 那列沒有 lineHash 屬性＝名冊少了欄，但 gf 還有別列帶 lineHash
   eq('LINE：整個來源都沒有 lineHash 屬性＝不知道綁定狀態→那店整店不動', SD.dzyApply(staff, dir, GOT([{ src: 'gf', empId: 'A3', active: true }, { src: 'gf', empId: 'A1', active: true }]), NOW).staff.map((s) => s.lineHash), [ '', H1, H3, '']);
   eq('LINE：沒有打卡名單（橋接失敗 got=null）→全部不動，其他欄位照常同步', SD.dzyApply(staff, dir, null, NOW).staff.map((s) => s.lineHash), ['', H1, H3, '']);
-  eq('LINE：換新的 got 讀取剛好部分來源（gf 在、js 不在）→主店在 js 的人不動', SD.dzyApply(staff, dir, g2, NOW).staff[1].lineHash, H1); }
+  // G7：依來源撤銷——主店 js 可讀且那列沒綁，就算另一家（mgf）讀不到也要清，不因讀不到而保留舊雜湊
+  { const r = SD.dzyApply(staff, dir, g2, NOW), s2 = by(r, 'S-002');
+    eq('G7 LINE：來源可讀且已解除綁定→清空並 pinVer+1，不因其他來源讀不到而保留', [s2.lineHash, s2.pinVer], ['', 3]); }
+  { const g = GOT([R('gf', 'A1', 'x', { lineHash: H1 }), R('js', 'J2', 'x'), R('mgf', 'G2', 'x', { lineHash: H2 })], ['gf', 'js']);   // js 可讀沒綁、mgf 讀不到
+    eq('G7 LINE：另一來源讀不到、可讀的有綁→取可讀的', SD.dzyApply(staff, dir, GOT([R('js', 'J2', 'x', { lineHash: H3 })], ['js']), NOW).staff[1].lineHash, H3);
+    const gc = GOT([R('js', 'J2', 'x', { lineHash: H1 }), R('mgf', 'G2', 'x', { lineHash: H2 })]), rc = SD.dzyApply(staff, dir, gc, NOW);
+    eq('G7 LINE：兩個來源出現不同雜湊→鎖定該人自動登入（清空＋pinVer+1）並告警', [by(rc, 'S-002').lineHash, by(rc, 'S-002').pinVer, rc.lineConflicts], ['', 3, ['S-002']]);
+    eq('G7 LINE：兩來源雜湊相同→不算衝突', SD.dzyApply(staff, dir, GOT([R('js', 'J2', 'x', { lineHash: H1 }), R('mgf', 'G2', 'x', { lineHash: H1 })]), NOW).lineConflicts, []); } }
 
 // ---------- 4. 煞車 ----------
 { const st = Array.from({ length: 10 }, (_, i) => S0('S-' + String(i + 1).padStart(3, '0'), '甲' + i, 'mala', { dzy: 'DZY' + (i + 1) }));
@@ -140,7 +153,7 @@ function fakePlatform(rows, key) {
 const seed = (dir, staff, flag) => {
   const st = makeSqliteStore(dir);
   st.load({ posts: [], staff, reads: [], log: [] });
-  if (flag) st.kvSet(SD.MIGRATED_KEY, 'x');
+  if (flag) { st.kvSet(SD.MIGRATED_KEY, 'x'); st.kvSet(SD.SWITCH_KEY, 'x'); }
   st.close();
 };
 const dump = (dir) => { const st = makeSqliteStore(dir), s = st.getStaff(); st.close(); return s; };
@@ -164,9 +177,11 @@ const bridgeOf = (got, fail) => { const b = { calls: [] }; b.call = async (op, p
   eq('端點：dirConfig 讀 DZY_PLATFORM_URL／BULLETIN_SVC_KEY', SD.dirConfig({ DZY_PLATFORM_URL: ' http://127.0.0.1:8799/platform/api ', BULLETIN_SVC_KEY: 'k' }), { url: 'http://127.0.0.1:8799/platform/api', key: 'k' });
 
   // ---------- 6. 回退開關：預設 clock ----------
-  const kv = (v) => (k) => (k === SD.MIGRATED_KEY ? v : null);
+  const kv = (v) => (k) => ((k === SD.MIGRATED_KEY || k === SD.SWITCH_KEY) ? v : null);
   eq('開關：沒設 STAFF_SOURCE→clock（今天行為）', [SD.effectiveSource({}, kv('x')), SD.effectiveSource({ STAFF_SOURCE: '' }, kv('x')), SD.effectiveSource({ STAFF_SOURCE: 'clock' }, kv('x')), SD.effectiveSource({ STAFF_SOURCE: '亂寫' }, kv('x'))], ['clock', 'clock', 'clock', 'clock']);
-  eq('開關：dzy 但搬家還沒通過→仍是 clock 並警告', [SD.effectiveSource({ STAFF_SOURCE: 'dzy' }, kv(null)), /搬家腳本還沒通過/.test(SD.sourceWarning({ STAFF_SOURCE: 'dzy' }, kv(null)))], ['clock', true]);
+  eq('開關：dzy 但搬家還沒通過→仍是 clock 並警告', [SD.effectiveSource({ STAFF_SOURCE: 'dzy' }, kv(null)), /還不能切換/.test(SD.sourceWarning({ STAFF_SOURCE: 'dzy' }, kv(null)))], ['clock', true]);
+  eq('G8 開關：只有「已搬家」沒有「可切換」→仍是 clock', SD.effectiveSource({ STAFF_SOURCE: 'dzy' }, (k) => (k === SD.MIGRATED_KEY ? 'x' : null)), 'clock');
+  eq('G8 開關：只有「可切換」沒有「已搬家」→仍是 clock', SD.effectiveSource({ STAFF_SOURCE: 'dzy' }, (k) => (k === SD.SWITCH_KEY ? 'x' : null)), 'clock');
   eq('開關：dzy＋搬家通過→dzy（大小寫不拘）、無警告', [SD.effectiveSource({ STAFF_SOURCE: ' DZY ' }, kv('2026')), SD.sourceWarning({ STAFF_SOURCE: 'dzy' }, kv('2026'))], ['dzy', '']);
   const { config } = require('../server/index.js');
   eq('開關：伺服器設定預設 clock、dzy 要明確設', [config({}).STAFF_SOURCE, config({ STAFF_SOURCE: 'dzy' }).STAFF_SOURCE, config({ STAFF_SOURCE: 'x' }).STAFF_SOURCE], ['clock', 'dzy', 'clock']);
@@ -213,7 +228,7 @@ const bridgeOf = (got, fail) => { const b = { calls: [] }; b.call = async (op, p
     const got = GOT([R('gf', 'A1', 'x', { lineHash: H1 }), R('js', 'J2', 'x', { unit: 'mzt' }), R('gf', 'A3', 'x')]);
     const fetchDir = () => SD.fetchDirectory(cfgOk), B = bridgeOf(got);
     let r = await SD.runDzySync({ dir, bridge: B, fetchDir });
-    eq('sync：搬家沒通過（沒旗標）→拒絕、什麼都沒寫', [r.ok, /搬家腳本/.test(r.error), JSON.stringify(dump(dir))], [false, true, JSON.stringify(staff.map((s) => Object.assign({}, s)))]);
+    eq('sync：搬家沒通過（沒旗標）→拒絕、什麼都沒寫', [r.ok, /還不能切換/.test(r.error), JSON.stringify(dump(dir))], [false, true, JSON.stringify(staff.map((s) => Object.assign({}, s)))]);
     seed(dir, dump(dir), true);
     r = await SD.runDzySync({ dir, bridge: B, fetchDir, dryRun: true });
     eq('sync dryRun：回報會做什麼但不寫', [r.ok, r.dryRun, r.changes.added, r.changes.renamed, dump(dir).length], [true, true, 1, 1, 2]);
@@ -300,7 +315,7 @@ const bridgeOf = (got, fail) => { const b = { calls: [] }; b.call = async (op, p
     eq('搬家：人工確認姓名差異後（--allow-name-diff）才切', [r.ok, r.applied], [true, true]);
     // 回退開關：搬家通過後 STAFF_SOURCE=clock 仍是舊行為
     eq('回退：搬家通過後，STAFF_SOURCE=clock 仍走舊路徑（旗標不影響）', SD.effectiveSource({ STAFF_SOURCE: 'clock' }, (k) => kvOf(dirA, k)), 'clock');
-    eq('回退：STAFF_SOURCE=dzy＋旗標→dzy', SD.effectiveSource({ STAFF_SOURCE: 'dzy' }, (k) => kvOf(dirA, k)), 'dzy');
+    eq('回退：STAFF_SOURCE=dzy＋搬家旗標但沒有可切換→clock', SD.effectiveSource({ STAFF_SOURCE: 'dzy' }, (k) => kvOf(dirA, k)), 'clock');
 
     // CLI：輸出不含姓名
     const run = (args, env, dir) => new Promise((ok) => { const p = spawn(process.execPath, [path.join(__dirname, '..', 'server/staff-dzy.js')].concat(args), { env: Object.assign({}, process.env, { DZYB_NO_DOTENV: '1', DATA_DIR: dir, DZY_PLATFORM_URL: plat2.url, BULLETIN_SVC_KEY: 'K2' }, env || {}) });
@@ -353,7 +368,7 @@ const bridgeOf = (got, fail) => { const b = { calls: [] }; b.call = async (op, p
     eq('雙跑：需要天數常數＝7', SD.DUAL_NEED_DAYS, 7);
 
     // ---------- 12. mirror.js 整合：預設 clock 行為不變；dzy＋旗標才走新路徑 ----------
-    const mk = (flag, staffX) => { const dd = tmp(); const st = makeSqliteStore(dd); st.load({ posts: [{ id: 'P-1', title: '公告', units: ['mala'] }], staff: staffX, reads: [], log: [] }); if (flag) st.kvSet(SD.MIGRATED_KEY, 'x'); st.close(); return dd; };
+    const mk = (flag, staffX) => { const dd = tmp(); const st = makeSqliteStore(dd); st.load({ posts: [{ id: 'P-1', title: '公告', units: ['mala'] }], staff: staffX, reads: [], log: [] }); if (flag) { st.kvSet(SD.MIGRATED_KEY, 'x'); st.kvSet(SD.SWITCH_KEY, 'x'); } st.close(); return dd; };
     const sM = [S0('S-001', '舊名', 'mala', { src: 'gf:A1', dzy: 'DZY001' })];
     plat2.rows.splice(0, plat2.rows.length, P('DZY001', '測試甲', 'mala-gf', true, [['gf', 'A1']]));
     const gotM = GOT([R('gf', 'A1', 'x', { lineHash: H1 })], ['gf']);
@@ -371,7 +386,175 @@ const bridgeOf = (got, fail) => { const b = { calls: [] }; b.call = async (op, p
     eq('mirror dzy＋搬家通過→走新路徑：改名同步、LINE 綁上、bridge clock 帶 raw', [m.ok, m.line.source, m.line.ok, dump(dd)[0].name, dump(dd)[0].lineHash, JSON.parse(B.calls.find((c) => c[0] === 'clock')[1]).raw], [true, 'dzy', true, '測試甲', H1, true]);
     dd = mk(true, sM); plat2.mode = 'down';
     m = await quiet(() => runMirror({ dir: dd, bridge: bridgeOf(gotM), env: { STAFF_SOURCE: 'dzy' }, fetchDir: fetchE }));
-    eq('mirror dzy：管理系統連不上→名單不動、鏡像本身照常 ok', [m.ok, m.line.ok, dump(dd)[0].name], [true, false, '舊名']); plat2.mode = 'ok';
+    eq('G11 mirror dzy：管理系統連不上→名單不動、鏡像 ok=false、退出碼非 0', [m.ok, m.line.ok, dump(dd)[0].name, exitCode(m, false)], [false, false, '舊名', 1]); plat2.mode = 'ok';
+  }
+
+  // ================= 上線前關（Fable 第 5 輪＋GPT 盲審）佈告欄條目 =================
+  {
+    const plat3 = await fakePlatform([], 'K3'), cfg3 = { url: plat3.url, key: 'K3' };
+    const setRows = (rows) => plat3.rows.splice(0, plat3.rows.length, ...rows);
+    const useRows = () => { plat3.server.removeAllListeners('request'); plat3.server.on('request', (rq, rs) => { rs.setHeader('Content-Type', 'application/json'); rs.end(JSON.stringify({ ok: true, data: plat3.rows })); }); };
+    const fetch3 = () => SD.fetchDirectory(cfg3);
+    const base = () => [S0('S-001', '測試甲', 'mala', { src: 'gf:A1', dzy: 'DZY001', pinHash: 'PH', salt: 'SA', lineHash: H1 }), S0('S-002', '測試乙', 'mala', { src: 'gf:A2', dzy: 'DZY002', lineHash: H2 })];
+    const dirOk = [P('DZY001', '測試甲', 'mala-gf', true, [['gf', 'A1']]), P('DZY002', '測試乙', 'mala-gf', true, [['gf', 'A2']])];
+    const gotOk = GOT([R('gf', 'A1', 'x', { lineHash: H1 }), R('gf', 'A2', 'x', { lineHash: H2 })], ['gf']);
+    const fresh = (staff) => { const d = tmp(); seed(d, staff, true); return d; };
+    const same = (d, staff) => canon(dump(d)) === canon(withHash(staff));
+
+    // ---- G1：歧義／重複 lineHash 整輪拒寫；登入端遇到多個在職者拒絕 ----
+    { setRows([P('DZY001', '測試甲', 'mala-gf', true, [['gf', 'A1']]), P('DZY002', '測試乙', 'mala-gf', true, [['gf', 'A1'], ['gf', 'A2']]), P('DZY003', '新人', 'mala-gf', true, [['gf', 'A3']])]);
+      const d = fresh(base());
+      let r = await SD.runDzySync({ dir: d, bridge: bridgeOf(gotOk), fetchDir: fetch3 });
+      eq('G1 一個打卡編號對到兩個 DZY→整輪拒寫並告警（新人也沒加）', [r.ok, /對到兩個以上/.test(r.error), same(d, base())], [false, true, true]);
+      const r2 = SD.dzyApply(base(), N([P('DZY001', '測試甲', 'mala-gf', true, [['gf', 'A1']]), P('DZY002', '測試乙', 'mala-gf', true, [['gf', 'A2']])]), GOT([R('gf', 'A1', 'x', { lineHash: H1 }), R('gf', 'A2', 'x', { lineHash: H1 })]), NOW);
+      eq('G1 同一個非空 lineHash 會寫給兩個在職帳號→roundProblem 擋', [r2.dupHash.sort(), /同一個 LINE 綁定會寫給 2 個/.test(SD.roundProblem(r2))], [['S-001', 'S-002'], true]);
+      setRows(dirOk);
+      const d2 = fresh(base());
+      r = await SD.runDzySync({ dir: d2, bridge: bridgeOf(GOT([R('gf', 'A1', 'x', { lineHash: H1 }), R('gf', 'A2', 'x', { lineHash: H1 })], ['gf'])), fetchDir: fetch3 });
+      eq('G1 同步：重複 lineHash→整輪拒寫、什麼都沒動', [r.ok, /同一個 LINE 綁定/.test(r.error), same(d2, base())], [false, true, true]);
+      const dv = await quiet(() => SD.runDual({ dir: d2, bridge: bridgeOf(GOT([R('gf', 'A1', 'x', { lineHash: H1 }), R('gf', 'A2', 'x', { lineHash: H1 })], ['gf'])), fetchDir: fetch3, now: () => new Date('2026-10-13T04:00:00Z'), noWrite: true }));
+      eq('G1 雙跑：新路徑會被拒寫的那天不算全同', [dv.same, !!dv.problem], [false, true]);
+      // 登入端
+      const mem = (staff) => { const d = { staff }; return { d, getPosts: () => [], getStaff: () => JSON.parse(JSON.stringify(d.staff)), saveStaff() {}, getReads: () => [], addRead() {}, addLog() {}, secret: () => 'SECRET', getAdmin: () => ({}) }; };
+      const dup = [S0('S-001', '測試甲', 'mala', { lineHash: A.lineHash('UX') }), S0('S-002', '測試乙', 'mzt', { lineHash: A.lineHash('UX') })];
+      const clk = { nowMs: () => Date.now(), today: () => L.today(new Date()) }, ver = { verify: () => 'UX' };
+      const svD = makeService_(L, mem(dup), { quota: () => null }, A, clk, null, ver, { staffSource: 'dzy' }), svC = makeService_(L, mem(dup), { quota: () => null }, A, clk, null, ver, { staffSource: 'clock' });
+      const lr = svD.call('lineLogin', { idToken: 'TEST:x' });
+      eq('G1 登入端 dzy 模式：同一 lineHash 對到兩位在職→拒絕、不給選（也不接受帶 staffId 挑一個）', [lr.ok, lr.code, svD.call('lineLogin', { idToken: 'TEST:x', staffId: 'S-001' }).ok], [false, 'LINE_AMBIGUOUS', false]);
+      eq('G1 登入端 clock 模式：維持舊行為回 choices（同一人兩筆是既有合法情境）', [svC.call('lineLogin', { idToken: 'TEST:x' }).data.choices.length], [2]); }
+
+    // ---- G2：重複 emp_no 整輪中止（端點 → 同步、搬家都不動）----
+    { setRows([P('DZY001', '測試甲', 'mala-gf', true, [['gf', 'A1']]), P('DZY001', '另一個', 'mala-gf', true, [['gf', 'A9']]), P('DZY002', '測試乙', 'mala-gf', true, [['gf', 'A2']])]);
+      const d = fresh(base());
+      const r = await SD.runDzySync({ dir: d, bridge: bridgeOf(gotOk), fetchDir: fetch3 });
+      eq('G2 同步：svcDirectory 有重複 emp_no→整輪中止、不動', [r.ok, /重複的 emp_no/.test(r.error), same(d, base())], [false, true, true]);
+      let e = ''; try { await SD.runMigrate({ dir: d, fetchDir: fetch3, apply: true }); } catch (x) { e = x.code; }
+      eq('G2 搬家：同樣中止（丟 DIR_DUP）', e, 'DIR_DUP'); setRows(dirOk); }
+
+    // ---- G3：姓名不一致不自動認領；人工認領清憑證 ----
+    { const stf = [S0('S-001', '舊員工', 'mala', { src: 'gf:A1', pinHash: 'OLDPH', salt: 'SA', pinVer: 4, lineHash: H1 })];
+      setRows([P('DZY001', '新員工', 'mala-gf', true, [['gf', 'A1']])]);
+      const d = fresh(stf);
+      let r = await SD.runDzySync({ dir: d, bridge: bridgeOf(GOT([R('gf', 'A1', 'x', { lineHash: H3 })], ['gf'])), fetchDir: fetch3 });
+      const a1 = dump(d);
+      eq('G3 同步：同一打卡編號、姓名不同→不自動認領、也不新增，列入人工清單', [r.ok, r.manual, r.manualIds, a1.length, a1[0].dzy || '', a1[0].pinHash], [true, 1, ['S-001'], 1, '', 'OLDPH']);
+      r = await SD.runClaim({ dir: d, fetchDir: fetch3, id: 'S-001', dzy: 'DZY001' });
+      const a2 = dump(d)[0];
+      eq('G3 人工認領：清除 pinHash／salt／lineHash 並提升 pinVer', [r.ok, a2.dzy, a2.pinHash, a2.salt, a2.lineHash, a2.pinVer], [true, 'DZY001', '', '', '', 5]);
+      eq('G3 認領：不存在的 DZY／已被使用的 DZY／已掛的 S 都拒絕', [(await SD.runClaim({ dir: d, fetchDir: fetch3, id: 'S-001', dzy: 'DZY001' })).ok, (await SD.runClaim({ dir: d, fetchDir: fetch3, id: 'S-009', dzy: 'DZY001' })).ok, (await SD.runClaim({ dir: d, fetchDir: fetch3, id: 'S-001', dzy: 'DZY777' })).ok], [false, false, false]);
+      // 搬家用 --allow-name-diff 認領姓名不同者，也清憑證
+      const d2 = tmp(); seed(d2, [S0('S-001', '舊員工', 'mala', { src: 'gf:A1', pinHash: 'OLDPH', salt: 'SA', pinVer: 4, lineHash: H1 }), S0('S-002', '測試乙', 'mala', { src: 'gf:A2', pinHash: 'KEEP', salt: 'S2', pinVer: 1 })], false);
+      setRows([P('DZY001', '新員工', 'mala-gf', true, [['gf', 'A1']]), P('DZY002', '測試乙', 'mala-gf', true, [['gf', 'A2']])]);
+      const mr = await SD.runMigrate({ dir: d2, fetchDir: fetch3, apply: true, allowNameDiff: true }), m2 = dump(d2);
+      eq('G3 搬家 --allow-name-diff：姓名不同者清憑證＋pinVer+1，姓名相同者保留密碼', [mr.credsCleared, m2[0].pinHash, m2[0].pinVer, m2[1].pinHash, m2[1].pinVer], [1, '', 5, 'KEEP', 1]); }
+
+    // ---- G6：已連結 dzy 的在職帳號缺列 → 整輪失敗；筆數與 total 不符 → 失敗 ----
+    { setRows([dirOk[0]]);
+      const d = fresh(base());
+      let r = await SD.runDzySync({ dir: d, bridge: bridgeOf(gotOk), fetchDir: fetch3 });
+      eq('G6 同步：S-002 連結的 DZY002 不在名單→整輪失敗告警、什麼都沒動', [r.ok, /不在名單裡（S-002）/.test(r.error), same(d, base())], [false, true, true]);
+      setRows([dirOk[0], P('DZY002', '測試乙', 'mala-gf', false, [['gf', 'A2']])]);
+      r = await SD.runDzySync({ dir: d, bridge: bridgeOf(gotOk), fetchDir: fetch3 });
+      eq('G6 同步：名單含停用者（active=false）→不算缺列、照常停用 S-002', [r.ok, dump(d)[1].active], [true, false]);
+      const dv = await quiet(() => SD.runDual({ dir: fresh(base()), bridge: bridgeOf(gotOk), fetchDir: async () => N([dirOk[0]]), noWrite: true }));
+      eq('G6 雙跑：缺列＝不算全同', [dv.same, /不在名單裡/.test(dv.problem)], [false, true]);
+      plat3.server.removeAllListeners('request'); plat3.server.on('request', (rq, rs) => { rs.setHeader('Content-Type', 'application/json'); rs.end(JSON.stringify({ ok: true, data: { staff: [P('DZY001', '測試甲', 'mala-gf', true, [])], total: 5, generated_at: 'x' } })); });
+      const d2 = fresh(base()); r = await SD.runDzySync({ dir: d2, bridge: bridgeOf(gotOk), fetchDir: fetch3 });
+      eq('G6 同步：筆數與 total 不符→失敗、不動', [r.ok, /total/.test(r.error), same(d2, base())], [false, true, true]); }
+
+    // ---- G11：失敗記錄與最後成功時間 ----
+    { const d = fresh(base()); setRows(dirOk);
+      plat3.server.removeAllListeners('request'); const h = (rows) => (rq, rs) => { rs.setHeader('Content-Type', 'application/json'); rs.end(JSON.stringify({ ok: true, data: rows })); };
+      plat3.server.on('request', h(dirOk));
+      let r = await SD.runDzySync({ dir: d, bridge: bridgeOf(gotOk), fetchDir: fetch3 });
+      const okAt = r.lastOkAt;
+      eq('G11 成功：記最後成功時間', [r.ok, !!okAt, JSON.parse(fs.readFileSync(path.join(d, 'logs', 'staff-dzy-last.json'), 'utf8')).ok], [true, true, true]);
+      plat3.server.removeAllListeners('request'); plat3.server.on('request', h([dirOk[0]]));
+      r = await SD.runDzySync({ dir: d, bridge: bridgeOf(gotOk), fetchDir: fetch3 });
+      const last = JSON.parse(fs.readFileSync(path.join(d, 'logs', 'staff-dzy-last.json'), 'utf8'));
+      eq('G11 失敗：記原因、保留上次成功時間', [r.ok, last.ok, last.lastOkAt === okAt, !!last.error, r.lastOkAt === okAt], [false, false, true, true, true]);
+      // mirror：dzy 同步失敗 → 鏡像 ok=false、exit 非 0、mirror.log 有「失敗」與最後成功時間
+      const dm = fresh(base()); const mfetch = async () => N([dirOk[0]]);
+      const m = await quiet(() => runMirror({ dir: dm, bridge: bridgeOf(gotOk), env: { STAFF_SOURCE: 'dzy' }, fetchDir: mfetch }));
+      eq('G11 mirror：缺列→ok=false、退出碼 1、log 寫失敗', [m.ok, exitCode(m, false), /同仁名單同步（管理系統）失敗/.test(fs.readFileSync(path.join(dm, 'logs', 'mirror.log'), 'utf8')), /同仁名單同步/.test(m.error)], [false, 1, true, true]);
+      plat3.server.removeAllListeners('request'); plat3.server.on('request', h(dirOk));
+      // #31 mirror.log 印 skipped／orphans 筆數
+      const dm2 = fresh(base()); await quiet(() => runMirror({ dir: dm2, bridge: bridgeOf(gotOk), env: { STAFF_SOURCE: 'dzy' }, fetchDir: async () => N(dirOk.concat([P('DZY009', '怪', 'zzz', true, [])])) }));
+      eq('#31 mirror.log 印 skipped／orphans／未掛 dzy／待人工認領 筆數', /略過 1、管理系統沒有的在職 0、未掛 dzy 0、待人工認領 0/.test(fs.readFileSync(path.join(dm2, 'logs', 'mirror.log'), 'utf8')), true); }
+
+    // ---- #32：橋接回應不是 raw → 當 lineErr ----
+    { const d = fresh(base()), notRaw = Object.assign({}, gotOk); delete notRaw.raw;
+      const r = await SD.runDzySync({ dir: d, bridge: bridgeOf(notRaw), fetchDir: fetch3 });
+      eq('#32 同步：橋接回應不是 raw→lineSkipped、LINE 不動', [r.ok, /raw/.test(r.lineSkipped), same(d, base())], [true, true, true]);
+      const dv = await quiet(() => SD.runDual({ dir: d, bridge: bridgeOf(notRaw), fetchDir: fetch3, noWrite: true }));
+      eq('#32 雙跑：橋接回應不是 raw→不算全同', [dv.same, /raw/.test(dv.lineSkipped)], [false, true]); }
+
+    // ---- #30：雙跑 lineHash 只比在職 ----
+    { const cmp = SD.compareStaff([S0('S-001', 'x', 'mala', { active: false, lineHash: H1 }), S0('S-002', 'y', 'mala', { lineHash: H1 })], [S0('S-001', 'x', 'mala', { active: false, lineHash: '' }), S0('S-002', 'y', 'mala', { lineHash: '' })]);
+      eq('#30 compareStaff：已刪除者的雜湊不比、在職者才比', [cmp.hash, cmp.active], [['S-002'], []]); }
+
+    // ---- #31：總部單位對照 ----
+    { const dir = N([P('DZY001', '甲', 'mzt-hq', true, [['hq', 'H1']]), P('DZY002', '乙', 'mala-hq', true, [['hq', 'H2']]), P('DZY003', '丙', 'dzy-hq', true, [['hq', 'H3']]), P('DZY004', '丁', 'mzt-hq', true, [['hq', 'H4']])]);
+      const stf = [S0('S-001', '丁', 'hq-dzy', { dzy: 'DZY004', src: 'hq:H4' })];
+      const r = SD.dzyApply(stf, dir, null, NOW), u = (d) => r.staff.find((s) => s.dzy === d);
+      eq('#31 mzt-hq→hq-mzt、mala-hq→hq-mala、dzy-hq→hq-dzy（新人）；既有的人單位跟著管理系統調整', [u('DZY001').unit, u('DZY002').unit, u('DZY003').unit, u('DZY004').unit, r.ch.moved], ['hq-mzt', 'hq-mala', 'hq-dzy', 'hq-mzt', ['S-001']]);
+      eq('#31 其餘單位（mzt-wx）佈告欄沒有對應→不新增', SD.dzyApply([], N([P('DZY001', '甲', 'mzt-wx', true, [])]), null, NOW).ch.skipped, ['DZY001']); }
+
+    useRows();
+    // ---- G8：可切換旗標只有 canRetire 才寫；沒有就當 clock；mirror 自動雙跑 ----
+    { const d = tmp(); seed(d, base(), false);
+      const st = makeSqliteStore(d); st.kvSet(SD.MIGRATED_KEY, 'x'); st.close();
+      setRows(dirOk);
+      const sw = () => kvOf(d, SD.SWITCH_KEY);
+      for (let i = 0; i < 6; i++) await quiet(() => SD.runDual({ dir: d, bridge: bridgeOf(gotOk), fetchDir: fetch3, now: () => new Date(Date.UTC(2026, 9, 7 + i, 4)) }));
+      eq('G8 雙跑連續 6 天全同→還不寫「可切換」', [sw(), SD.dualStatus(d, new Date('2026-10-12T04:00:00Z')).canRetire], [null, false]);
+      let v = await quiet(() => SD.runDual({ dir: d, bridge: bridgeOf(gotOk), fetchDir: fetch3, now: () => new Date('2026-10-13T04:00:00Z') }));
+      eq('G8 第 7 天全同（canRetire）→寫「可切換」旗標', [v.switchable, !!sw()], [true, true]);
+      eq('G8 兩個旗標齊了 STAFF_SOURCE=dzy 才生效', SD.effectiveSource({ STAFF_SOURCE: 'dzy' }, (k) => kvOf(d, k)), 'dzy');
+      const d2 = tmp(); seed(d2, base(), false);   // 沒搬家就雙跑：不寫旗標
+      for (let i = 0; i < 7; i++) await quiet(() => SD.runDual({ dir: d2, bridge: bridgeOf(gotOk), fetchDir: fetch3, now: () => new Date(Date.UTC(2026, 9, 7 + i, 4)) }));
+      eq('G8 沒有「已搬家」旗標→雙跑再久也不寫「可切換」', kvOf(d2, SD.SWITCH_KEY), null);
+      const d3 = tmp(); seed(d3, base(), false); const s3 = makeSqliteStore(d3); s3.kvSet(SD.MIGRATED_KEY, 'x'); s3.close();
+      for (let i = 0; i < 7; i++) await quiet(() => SD.runDual({ dir: d3, bridge: bridgeOf(i === 3 ? GOT([R('gf', 'A1', 'x', { lineHash: H3 })], ['gf']) : gotOk), fetchDir: fetch3, now: () => new Date(Date.UTC(2026, 9, 7 + i, 4)) }));
+      eq('G8 中間有一天有差異→連續天數歸零，不寫「可切換」', [kvOf(d3, SD.SWITCH_KEY), SD.dualStatus(d3, new Date('2026-10-13T04:00:00Z')).streak], [null, 3]);
+      // 已搬家但還沒切換：dzy 同步拒絕
+      const d4 = tmp(); seed(d4, base(), false); const s4 = makeSqliteStore(d4); s4.kvSet(SD.MIGRATED_KEY, 'x'); s4.close();
+      const r4 = await SD.runDzySync({ dir: d4, bridge: bridgeOf(gotOk), fetchDir: fetch3 });
+      eq('G8 同步：只有「已搬家」沒有「可切換」→拒絕', [r4.ok, /可切換/.test(r4.error)], [false, true]);
+      // mirror 在 clock 模式、已搬家、今天沒雙跑過 → 自動雙跑一次
+      const d5 = tmp(); seed(d5, base(), false); const s5 = makeSqliteStore(d5); s5.kvSet(SD.MIGRATED_KEY, 'x'); s5.close();
+      await quiet(() => runMirror({ dir: d5, bridge: bridgeOf(gotOk), env: { STAFF_SOURCE: 'clock' }, fetchDir: fetch3 }));
+      eq('G8 mirror（clock 模式、已搬家）每日自動雙跑一次', [fs.existsSync(path.join(d5, 'logs', 'staff-dual-last.json')), /雙跑比對/.test(fs.readFileSync(path.join(d5, 'logs', 'mirror.log'), 'utf8'))], [true, true]);
+      const d6 = tmp(); seed(d6, base(), false);
+      await quiet(() => runMirror({ dir: d6, bridge: bridgeOf(gotOk), env: {}, fetchDir: fetch3 }));
+      eq('G8 沒搬家過的機器：mirror 不雙跑（行為與今天相同）', fs.existsSync(path.join(d6, 'logs', 'staff-dual-last.json')), false); }
+
+    // ---- G12：rollback ----
+    { setRows(dirOk);
+      const pre = [S0('S-001', '測試甲', 'mala', { src: 'gf:A1', pinHash: 'PH1', salt: 'S1', pinVer: 2 }), S0('S-002', '測試乙', 'mala', { src: 'gf:A2', pinVer: 0 })];
+      const d = tmp(); seed(d, pre, false);
+      let r = await SD.runMigrate({ dir: d, fetchDir: fetch3, apply: true, now: new Date(NOW) });
+      const snap = r.snapshot;
+      const st = makeSqliteStore(d); st.kvSet(SD.SWITCH_KEY, 'x'); st.close();
+      // 切換後發生的事：改名、換單位、新人、使用者改了密碼
+      setRows([P('DZY001', '改過名', 'mzt-gf', true, [['mztgf', 'G1']]), P('DZY002', '測試乙', 'mala-gf', false, [['gf', 'A2']]), P('DZY003', '新人', 'mala-gf', true, [['gf', 'A3']])]);
+      await SD.runDzySync({ dir: d, bridge: bridgeOf(GOT([], ['gf'])), fetchDir: fetch3 });
+      const mid = makeSqliteStore(d); const s1 = mid.getStaff().find((x) => x.id === 'S-001'); s1.pinHash = 'NEWPH'; s1.pinVer = 3; mid.saveStaff(s1); mid.close();
+      eq('rollback 前：切換後的狀態（改名、換單位、S-002 停用、新人 S-003）', [dump(d).map((s) => s.name + '|' + s.unit + '|' + s.active).join(','), dump(d).length], ['改過名|mzt|true,測試乙|mala|false,新人|mala|true', 3]);
+      // 再搬一次不會覆蓋最早的快照
+      r = await SD.runMigrate({ dir: d, fetchDir: fetch3, apply: true });
+      eq('G12 已搬家後再 --apply：沿用最早的快照，不覆蓋', r.snapshot, snap);
+      const rb = SD.runRollback({ dir: d });
+      const af = dump(d);
+      eq('G12 rollback：恢復搬家前的姓名／單位／在職／src', [rb.ok, rb.snapshot === snap, af[0].name, af[0].unit, af[0].src, af[1].active], [true, true, '測試甲', 'mala', 'gf:A1', true]);
+      eq('G12 rollback：保留現有密碼（不救回舊密碼）、快照之後新增的同仁保留', [af[0].pinHash, af[2].id, af.length], ['NEWPH', 'S-003', 3]);
+      eq('G12 rollback：全部同仁 pinVer+1（含快照之後新增者）', af.map((s) => s.pinVer), [4, 1, 1]);
+      eq('G12 rollback：兩個旗標都清掉→STAFF_SOURCE=dzy 也是 clock', [kvOf(d, SD.MIGRATED_KEY), kvOf(d, SD.SWITCH_KEY), SD.effectiveSource({ STAFF_SOURCE: 'dzy' }, (k) => kvOf(d, k))], [null, null, 'clock']);
+      eq('G12 rollback：沒有快照→拒絕、什麼都不動', (() => { const e = tmp(); seed(e, pre, true); const x = SD.runRollback({ dir: e }); return [x.ok, same(e, pre)]; })(), [false, true]);
+      const cli = await new Promise((ok) => { const e = tmp(); seed(e, pre, true); const p = spawn(process.execPath, [path.join(__dirname, '..', 'server/staff-dzy.js'), 'rollback'], { env: Object.assign({}, process.env, { DZYB_NO_DOTENV: '1', DATA_DIR: e }) }); let out = ''; p.stdout.on('data', (c) => { out += c; }); p.on('close', (code) => ok({ code, out })); });
+      eq('G12 CLI rollback：沒快照→exit 1', cli.code, 1);
+      const doc = fs.readFileSync(path.join(__dirname, '..', 'server/DEPLOY.md'), 'utf8');
+      eq('G12 DEPLOY 附錄 D 有 rollback 回退步驟與兩個旗標', [/staff-dzy\.js rollback/.test(doc), /可切換/.test(doc)], [true, true]); }
   }
 })().catch((e) => { fail++; console.log('✗ 例外', e && e.stack || e); }).finally(() => {
   servers.forEach((s) => { try { s.close(); } catch (e) {} });
