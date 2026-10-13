@@ -30,7 +30,7 @@ const NOW = '2026-10-13T02:00:00.000Z';
 const S0 = (id, name, unit, extra) => Object.assign({ id, name, unit, pinHash: '', salt: '', pinVer: 0, fail: 0, active: true, createdAt: '', deletedAt: '', src: '', store: '', lineHash: '' }, extra || {});
 // 管理系統的人：clocks 寫成 [store_code, emp_id, role]
 const P = (dzy, name, unit, active, clocks) => ({ emp_no: dzy, name, unit, unit_name: unit, active, clocks: (clocks || []).map((c) => ({ store_code: c[0], emp_id: c[1], role: c[2] || 'home' })) });
-const N = (list) => SD.normalizeDirectory(list);
+const N = (list, meta) => SD.normalizeDirectory(list, meta || { total: list.length });   // 預設帶正確的 total（真實形狀的 total 在最外層）
 const R = (src, empId, name, extra) => Object.assign({ src, unit: 'mala', store: '', empId, name, active: true, lineHash: '' }, extra || {});
 const GOT = (rows, sources) => ({ raw: true, rows, sources: sources || ['gf', 'js', 'mgf', 'cf', 'hq', 'lzl'], errors: [], counts: {}, messages: [] });
 const by = (r, id) => r.staff.find((s) => s.id === id);
@@ -51,10 +51,14 @@ eq('對照：單位代碼', Object.keys(SD.UNIT_OF_DZY).sort(), ['ck', 'dzy-hq',
   let e = null; try { N({ x: 1 }); } catch (x) { e = x.code; } eq('目錄：不是陣列→丟錯 DIR_BAD', e, 'DIR_BAD');
   e = null; try { N([P('DZY004', '甲', 'ck', true), P('DZY004', '乙', 'ck', true)]); } catch (x) { e = x.code; }
   eq('G2 目錄：重複 emp_no→整輪中止（DIR_DUP），不取第一筆', e, 'DIR_DUP');
-  const nz = N({ staff: [P('DZY001', '甲', 'ck', true), P('DZY002', '乙', 'ck', false)], total: 2, generated_at: '2026-10-13 06:00:00' });
-  eq('G6 目錄：新格式 {staff,total,generated_at}（含停用）可讀', [nz.people.length, nz.total, nz.generatedAt, nz.people[1].active], [2, 2, '2026-10-13 06:00:00', false]);
-  e = null; try { N({ staff: [P('DZY001', '甲', 'ck', true)], total: 2 }); } catch (x) { e = x.code; }
-  eq('G6 目錄：筆數與 total 不符→失敗（DIR_TOTAL）', e, 'DIR_TOTAL'); }
+  const nz = N([P('DZY001', '甲', 'ck', true), P('DZY002', '乙', 'ck', false)], { total: 2, generated_at: '2026-10-13 06:00:00' });
+  eq('G6 目錄：真實形狀（total／generated_at 在最外層，含停用）可讀', [nz.people.length, nz.total, nz.generatedAt, nz.people[1].active], [2, 2, '2026-10-13 06:00:00', false]);
+  e = null; try { N([P('DZY001', '甲', 'ck', true)], { total: 2 }); } catch (x) { e = x.code; }
+  eq('G6 目錄：筆數與 total 不符→失敗（DIR_TOTAL）', e, 'DIR_TOTAL');
+  const noTot = (m) => { try { SD.normalizeDirectory([P('DZY001', '甲', 'ck', true)], m); return 'no-error'; } catch (x) { return x.code; } };
+  eq('G6 目錄：缺 total／total 不是數字→失敗（DIR_NO_TOTAL）', [noTot(undefined), noTot({}), noTot({ total: '1' }), noTot({ total: null }), noTot({ total: NaN })], ['DIR_NO_TOTAL', 'DIR_NO_TOTAL', 'DIR_NO_TOTAL', 'DIR_NO_TOTAL', 'DIR_NO_TOTAL']);
+  e = null; try { SD.normalizeDirectory({ staff: [], total: 0 }, { total: 0 }); } catch (x) { e = x.code; }
+  eq('G6 目錄：不再支援 {staff,…} 形狀', e, 'DIR_BAD'); }
 
 // ---------- 2. G1 dzyApply：新增／停用／復職／改名／單位／主店 ----------
 { const staff = [S0('S-001', '舊名字', 'mala', { src: 'gf:A1', dzy: 'DZY001' }), S0('S-002', '測試乙', 'mzt', { src: 'js:J1', store: '金山', dzy: 'DZY002' }), S0('S-003', '測試丙', 'mala', { src: 'gf:A3', dzy: 'DZY003' }),
@@ -144,7 +148,7 @@ function fakePlatform(rows, key) {
       res.setHeader('Content-Type', 'application/json');
       if (h.mode === 'html') return res.end('<html>x</html>');
       if (j.action !== 'svcDirectory' || !j.payload || j.payload.svc_key !== h.key) return res.end(JSON.stringify({ ok: false, error: '服務金鑰錯誤', code: 'unauthorized' }));
-      res.end(JSON.stringify({ ok: true, data: h.rows }));
+      res.end(JSON.stringify({ ok: true, data: h.rows, total: h.rows.length, generated_at: '2026-10-13 06:00:00' }));
     });
   });
   return new Promise((ok) => h.server.listen(0, '127.0.0.1', () => { h.url = 'http://127.0.0.1:' + h.server.address().port + '/platform/api'; servers.push(h.server); ok(h); }));
@@ -393,7 +397,7 @@ const bridgeOf = (got, fail) => { const b = { calls: [] }; b.call = async (op, p
   {
     const plat3 = await fakePlatform([], 'K3'), cfg3 = { url: plat3.url, key: 'K3' };
     const setRows = (rows) => plat3.rows.splice(0, plat3.rows.length, ...rows);
-    const useRows = () => { plat3.server.removeAllListeners('request'); plat3.server.on('request', (rq, rs) => { rs.setHeader('Content-Type', 'application/json'); rs.end(JSON.stringify({ ok: true, data: plat3.rows })); }); };
+    const useRows = () => { plat3.server.removeAllListeners('request'); plat3.server.on('request', (rq, rs) => { rs.setHeader('Content-Type', 'application/json'); rs.end(JSON.stringify({ ok: true, data: plat3.rows, total: plat3.rows.length, generated_at: 'x' })); }); };
     const fetch3 = () => SD.fetchDirectory(cfg3);
     const base = () => [S0('S-001', '測試甲', 'mala', { src: 'gf:A1', dzy: 'DZY001', pinHash: 'PH', salt: 'SA', lineHash: H1 }), S0('S-002', '測試乙', 'mala', { src: 'gf:A2', dzy: 'DZY002', lineHash: H2 })];
     const dirOk = [P('DZY001', '測試甲', 'mala-gf', true, [['gf', 'A1']]), P('DZY002', '測試乙', 'mala-gf', true, [['gf', 'A2']])];
@@ -458,13 +462,20 @@ const bridgeOf = (got, fail) => { const b = { calls: [] }; b.call = async (op, p
       eq('G6 同步：名單含停用者（active=false）→不算缺列、照常停用 S-002', [r.ok, dump(d)[1].active], [true, false]);
       const dv = await quiet(() => SD.runDual({ dir: fresh(base()), bridge: bridgeOf(gotOk), fetchDir: async () => N([dirOk[0]]), noWrite: true }));
       eq('G6 雙跑：缺列＝不算全同', [dv.same, /不在名單裡/.test(dv.problem)], [false, true]);
-      plat3.server.removeAllListeners('request'); plat3.server.on('request', (rq, rs) => { rs.setHeader('Content-Type', 'application/json'); rs.end(JSON.stringify({ ok: true, data: { staff: [P('DZY001', '測試甲', 'mala-gf', true, [])], total: 5, generated_at: 'x' } })); });
+      const raw = (body) => { plat3.server.removeAllListeners('request'); plat3.server.on('request', (rq, rs) => { rs.setHeader('Content-Type', 'application/json'); rs.end(JSON.stringify(body)); }); };
+      raw({ ok: true, data: [P('DZY001', '測試甲', 'mala-gf', true, [])], total: 5, generated_at: 'x' });
       const d2 = fresh(base()); r = await SD.runDzySync({ dir: d2, bridge: bridgeOf(gotOk), fetchDir: fetch3 });
-      eq('G6 同步：筆數與 total 不符→失敗、不動', [r.ok, /total/.test(r.error), same(d2, base())], [false, true, true]); }
+      eq('G6 同步（真實形狀）：data 筆數與最外層 total 不符→失敗、不動', [r.ok, /total/.test(r.error), same(d2, base())], [false, true, true]);
+      raw({ ok: true, data: [P('DZY001', '測試甲', 'mala-gf', true, [['gf', 'A1']]), P('DZY002', '測試乙', 'mala-gf', true, [['gf', 'A2']])], generated_at: 'x' });
+      r = await SD.runDzySync({ dir: d2, bridge: bridgeOf(gotOk), fetchDir: fetch3 });
+      eq('G6 同步：回應缺 total→整輪失敗、不動', [r.ok, /缺少 total/.test(r.error), same(d2, base())], [false, true, true]);
+      raw({ ok: true, data: [P('DZY001', '測試甲', 'mala-gf', true, [['gf', 'A1']]), P('DZY002', '測試乙', 'mala-gf', true, [['gf', 'A2']])], total: 2, generated_at: 'x' });
+      r = await SD.runDzySync({ dir: d2, bridge: bridgeOf(gotOk), fetchDir: fetch3 });
+      eq('G6 同步：total 正確（真實形狀）→成功', r.ok, true); }
 
     // ---- G11：失敗記錄與最後成功時間 ----
     { const d = fresh(base()); setRows(dirOk);
-      plat3.server.removeAllListeners('request'); const h = (rows) => (rq, rs) => { rs.setHeader('Content-Type', 'application/json'); rs.end(JSON.stringify({ ok: true, data: rows })); };
+      plat3.server.removeAllListeners('request'); const h = (rows) => (rq, rs) => { rs.setHeader('Content-Type', 'application/json'); rs.end(JSON.stringify({ ok: true, data: rows, total: rows.length, generated_at: 'x' })); };
       plat3.server.on('request', h(dirOk));
       let r = await SD.runDzySync({ dir: d, bridge: bridgeOf(gotOk), fetchDir: fetch3 });
       const okAt = r.lastOkAt;

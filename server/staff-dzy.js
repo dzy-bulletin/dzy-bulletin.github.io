@@ -46,12 +46,14 @@ const srcKey = (s) => String(s || '');
 // ================= 純函式 =================
 
 // 管理系統回來的名單整理成內部格式。壞列丟掉並記數；同一 emp_no 出現兩次、同一個 store_code+emp_id 掛在兩個人身上 → 那把 key 不拿來對（ambiguousKeys）
-function normalizeDirectory(data) {
-  // 平台 svcDirectory 回全部 staff（含停用）：舊格式是陣列；新格式 { staff:[…], total, generated_at }（有 total 就必須與筆數相符，G6）
-  let list = data, total = null, generatedAt = '';
-  if (data && !Array.isArray(data) && typeof data === 'object') { list = data.staff || data.people || data.rows; total = data.total; generatedAt = String(data.generated_at || ''); }
+function normalizeDirectory(data, meta) {
+  // 平台 svcDirectory 實際回應：{ ok:true, data:[…全部 staff 含停用…], total:<數字>, generated_at:'yyyy-MM-dd HH:mm:ss' }（total／generated_at 在最外層，meta 帶進來）。
+  // total 必須存在且是數字、與 data 筆數相符，否則整輪失敗（G6）
+  const list = data;
   if (!Array.isArray(list)) throw bad('管理系統回傳的名單格式不符');
-  if (total !== null && total !== undefined && Number(total) !== list.length) throw bad(`管理系統名單筆數（${list.length}）與 total（${total}）不符，整輪中止`, 'DIR_TOTAL');
+  const total = meta && meta.total, generatedAt = String(meta && meta.generated_at || '');
+  if (typeof total !== 'number' || !Number.isFinite(total)) throw bad('管理系統回應缺少 total（或不是數字），整輪中止', 'DIR_NO_TOTAL');
+  if (total !== list.length) throw bad(`管理系統名單筆數（${list.length}）與 total（${total}）不符，整輪中止`, 'DIR_TOTAL');
   const people = [], seen = {}, dupNo = [], owners = {}, badRows = [];
   list.forEach((r, i) => {
     const dzy = String(r && r.emp_no || '').trim(), name = String(r && r.name || '').trim();
@@ -66,7 +68,7 @@ function normalizeDirectory(data) {
   people.forEach((p) => p.clocks.forEach((c) => { const k = c.store + ':' + c.empId; (owners[k] = owners[k] || []).indexOf(p.dzy) < 0 && owners[k].push(p.dzy); }));
   const ambiguousKeys = {};
   Object.keys(owners).forEach((k) => { if (owners[k].length > 1) ambiguousKeys[k] = owners[k]; });
-  return { people, byDzy: Object.fromEntries(people.map((p) => [p.dzy, p])), owners, ambiguousKeys, badRows, dupNo, total: total === null || total === undefined ? null : Number(total), generatedAt };
+  return { people, byDzy: Object.fromEntries(people.map((p) => [p.dzy, p])), owners, ambiguousKeys, badRows, dupNo, total, generatedAt };
 }
 function bad(msg, code) { const e = new Error(msg); e.code = code || 'DIR_BAD'; return e; }
 
@@ -266,7 +268,7 @@ async function fetchDirectory(cfg, opts) {
     j = await res.json();
   } catch (e) { throw bad('讀管理系統名單失敗：' + (e && e.name === 'TimeoutError' ? '逾時' : String(e && e.message || e).replace(cfg.key, '***')), 'DIR_NET'); }
   if (!j || j.ok !== true) throw bad('管理系統拒絕或出錯' + (j && j.code ? '（' + String(j.code).slice(0, 30) + '）' : ''), 'DIR_REJECT');
-  return normalizeDirectory(j.data);
+  return normalizeDirectory(j.data, { total: j.total, generated_at: j.generated_at });
 }
 
 // ================= DB 與紀錄（背景工作的做法：自己開一般連線，不經 makeSqliteStore） =================
