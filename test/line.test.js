@@ -339,6 +339,13 @@ function bridgeWith(clockData, failClock) {
   const codes = [];
   for (let k = 0; k < 16; k++) codes.push((await SV2.post('/', { action: 'lineLogin', idToken: 'TEST:U-s' + (1 + k % 2) })).ok ? 'ok' : 'BUSY');
   eq('伺服器 限流：沒帶 X-Forwarded-For 時 11 次以上照常（只到全體 15 才 BUSY）', [codes.slice(0, 15).every((c) => c === 'ok'), codes[15]], [true, 'BUSY']);
+  // login／setPin 每 IP 限流（2026-10-14 審查 #1）：只按來源 IP，別的 IP、不帶標頭（沒有全體上限）不受影響
+  const SV3 = await startSrv({ PIN_PER_MIN: '3', PIN_PER_HOUR: '5' });
+  const pc = [];
+  for (let k = 0; k < 4; k++) pc.push((await SV3.post('/', k % 2 ? { action: 'setPin', staffId: 'S-001', pin: '2580' } : { action: 'login', staffId: 'S-002', pin: '1111' }, IA)).code);
+  eq('伺服器 PIN 限流：同 IP 第 4 次 login／setPin → BUSY', pc, ['BAD_PIN', 'NEED_CODE', 'BAD_PIN', 'BUSY']);
+  eq('伺服器 PIN 限流：別的 IP 照常、不帶標頭照常', [(await SV3.post('/', { action: 'setPin', staffId: 'S-001', pin: '2580' }, IB)).code, (await SV3.post('/', { action: 'setPin', staffId: 'S-001', pin: '2580' })).code], ['NEED_CODE', 'NEED_CODE']);
+  eq('伺服器 PIN 限流：LINE 登入不受影響', (await SV3.post('/', { action: 'lineLogin', idToken: 'TEST:U-s1' }, IA)).ok, true);
   const out = SV.out() + SV2.out();
   eq('伺服器 roster 不含 lineHash', JSON.stringify((await post('/', { action: 'roster' })).data).includes('lineHash'), false);
   eq('伺服器 紀錄不含 idToken／sub', /TEST:U-s1|U-s1/.test(out), false);

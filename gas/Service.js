@@ -44,7 +44,7 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify, opts) 
   // 碼本身只在產生當下回給主管一次，資料庫只有雜湊
   function actOf(s) {
     var p = String(s.act || '').split('.');
-    if (p.length !== 4 || !(Number(p[0]) > 0)) return null;
+    if (p.length !== 4 || !(Number(p[0]) > 0) || !isFinite(Number(p[0]))) return null;
     return { exp: Number(p[0]), salt: p[1], hash: p[2], fail: Number(p[3]) || 0 };
   }
   function codeExp(s) { var a = actOf(s); return a && a.exp > clock.nowMs() && a.fail < L.CODE_MAX_FAIL ? new Date(a.exp).toISOString() : ''; }
@@ -112,7 +112,7 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify, opts) 
       if (bad) throw err(bad, bad === 'WEAK_PIN' ? '太好猜了（如 1111、1234），請換一組' : '請輸入 4 位數字');
       if (!viaLine) {
         var a = actOf(s);
-        if (!a || a.exp <= clock.nowMs() || a.fail >= L.CODE_MAX_FAIL || !q.code) throw err('NEED_CODE', '請從 LINE「鼎兆元打卡」選單點佈告欄進來，或請主管到「設定→同仁名單」幫你產生啟用碼');
+        if (!a || a.exp <= clock.nowMs() || a.fail >= L.CODE_MAX_FAIL || q.code === undefined || q.code === null || q.code === '') throw err('NEED_CODE', '請從 LINE「鼎兆元打卡」選單點佈告欄進來，或請主管到「設定→同仁名單」幫你產生啟用碼');
         if (!auth.safeEq(auth.hashPin(a.salt, String(q.code || '')), a.hash)) {
           a.fail++;
           var dead = a.fail >= L.CODE_MAX_FAIL;
