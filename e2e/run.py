@@ -161,8 +161,17 @@ def main():
         click('#pfBack2', '我知道了→回名單'); click(f'[data-pick="{locked["id"]}"]'); click('#pfBack', '返回→回名單')
 
         nopin = next(s for s in W.active_staff() if not s['pin'])
-        open_group(nopin); click(f'[data-pick="{nopin["id"]}"]', '點未設密碼者'); scan('設定密碼')
-        check('A 未設密碼者進入設定密碼', '設定個人密碼' in text('.sheet .bar'))
+        open_group(nopin); click(f'[data-pick="{nopin["id"]}"]', '點未設密碼者'); scan('輸入密碼（名單不透露誰沒設）')
+        check('A 名單不透露誰沒設密碼：未設密碼者也先看到輸入密碼', '輸入密碼' in text('.sheet .bar'))
+        click('#pfFirst', '第一次使用／主管給了啟用碼'); scan('第一次使用')
+        check('A 點第一次使用 → 啟用碼畫面', '第一次使用' in text('.sheet .bar'))
+        click('#pfHave', '我已經有密碼'); check('A 我已經有密碼 → 回輸入密碼', '輸入密碼' in text('.sheet .bar'))
+        pg.fill('#pv', '2580'); click('#pfGo', '未設密碼者輸入密碼'); wait(300)
+        check('A 未設密碼者輸入密碼 → 自動換成第一次使用', '第一次使用' in text('.sheet .bar'))
+        bad = '%06d' % ((int(nopin['code']) + 1) % 1000000)
+        pg.fill('#ac', bad); pg.fill('#p1', '2580'); pg.fill('#p2', '2580'); click('#pfGo'); wait(300)
+        check('A 啟用碼錯被擋、顯示剩餘次數', '還可以試 2 次' in text('#pfErr'), text('#pfErr'))
+        pg.fill('#ac', nopin['code'])
         pg.fill('#p1', '1234'); pg.fill('#p2', '1234'); click('#pfGo')
         check('A 弱密碼被擋', '太好猜' in text('#pfErr'))
         newpin = D.rand_pin(random.Random(SEED + 1))
@@ -366,7 +375,19 @@ def main():
         cand = [s for s in W.active_staff() if s['pin'] and s['id'] not in (dzy, 'NEW')]
         rs = r2.choice(cand)
         click(f'[data-rp="{rs["id"]}"]', '重設密碼'); W.staff[rs['id']]['pin'] = None
-        check('A 重設後顯示未設密碼', '未設密碼' in pg.locator('.sheet .arow', has_text=rs['name']).inner_text())
+        pg.wait_for_selector('#codeVal'); W.staff[rs['id']]['code'] = text('#codeVal').strip(); scan('啟用碼')
+        check('A 重設後顯示 6 位數啟用碼', _re.fullmatch(r'\d{6}', W.staff[rs['id']]['code']) is not None, W.staff[rs['id']]['code'])
+        click('#cdBack', '啟用碼完成'); pg.wait_for_selector('.sheet .arow'); wait(400)
+        check('A 重設後顯示啟用碼期限', '啟用碼' in pg.locator('.sheet .arow', has_text=rs['name']).inner_text())
+        old = W.staff[rs['id']]['code']
+        click(f'[data-ic="{rs["id"]}"]', '重新產生啟用碼'); pg.wait_for_selector('#codeVal'); W.staff[rs['id']]['code'] = text('#codeVal').strip()
+        check('A 重新產生 → 新的 6 位數碼', _re.fullmatch(r'\d{6}', W.staff[rs['id']]['code']) is not None)
+        click('#cdCopy', '複製給同仁的訊息'); wait(400)
+        if pg.locator('#stBack').count():
+            check('A 複製失敗時顯示可手動複製的訊息', W.staff[rs['id']]['code'] in pg.locator('textarea').input_value()); click('#stBack')
+        else:
+            check('A 複製後提示', '已複製' in text('#toast') if pg.locator('#toast').count() else True); click('#cdBack', '啟用碼完成')
+        pg.wait_for_selector('.sheet .arow'); wait(400)
         dl = r2.choice([s for s in W.active_staff() if s['id'] not in (dzy, 'NEW', rs['id'])])
         click(f'[data-del="{dl["id"]}"]', '刪除同仁'); W.staff[dl['id']]['active'] = False
         check('A 刪除後各單位人數', panel_counts() == exp_counts(), f'{panel_counts()} vs {exp_counts()}')

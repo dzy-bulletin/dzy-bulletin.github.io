@@ -847,7 +847,8 @@ async function main() {
     const JOB = { DATA_DIR: dir, BRIDGE_URL: URL0, BRIDGE_KEY: KEY };
     const BAD = { DATA_DIR: dir, BRIDGE_URL: 'http://127.0.0.1:' + (await freePort()) + '/exec', BRIDGE_KEY: KEY };
     await request(S.port, 'POST', '/__seed', { demo: true });
-    const tok = (await api(S.port, 'setPin', { staffId: 'S-013', pin: '2580' })).json.data.token;
+    const at0 = (await api(S.port, 'adminLogin', { pass: '1234' })).json.data.atoken;
+    const tok = (await api(S.port, 'setPin', { staffId: 'S-013', pin: '2580', code: (await api(S.port, 'staffIssueCode', { atoken: at0, staffId: 'S-013' })).json.data.code })).json.data.token;
     const board = (await api(S.port, 'board', { token: tok })).json.data;
     const todo = board.posts.map((p) => p.id).filter((id) => !board.myReads[id]);
     const acks = []; for (const id of todo) { if (acks.length >= 3) break; if ((await api(S.port, "ack", { token: tok, postId: id, sig: PNG(id) })).json.ok) acks.push(id); }

@@ -224,7 +224,7 @@ const bridgeOf = (got, fail) => { const b = { calls: [] }; b.call = async (op, p
     eq('GAS raw 模式：不套判定表（沒有 decided／dupOf／hold）、沒有判定訊息、帶 raw 標記', [raw.rows.some((r) => r.decided || r.dupOf || r.hold), raw.messages, raw.raw, raw.rows.length], [false, [], true, 3]);
     eq('GAS raw 模式：LINE 仍只交出雜湊', [JSON.stringify(raw).includes('U-a'), raw.rows.find((r) => r.empId === 'A1').lineHash], [false, A.lineHash('U-a')]);
     eq('GAS 橋接 clock op：帶 raw:true 才走 raw', [vm.runInContext('gasBridgeDeps_().clock({ raw: true })', G).raw, vm.runInContext('gasBridgeDeps_().clock({})', G).raw, vm.runInContext('gasBridgeDeps_().clock()', G).raw], [true, undefined, undefined]);
-    eq('GAS 同仁表多一欄 dzy（最後一欄）', vm.runInContext('SHEETS_.staff.cols', G).slice(-2), ['lineHash', 'dzy']); }
+    eq('GAS 同仁表 dzy 接在 lineHash 後、act（啟用碼）最後', vm.runInContext('SHEETS_.staff.cols', G).slice(-3), ['lineHash', 'dzy', 'act']); }
 
   // ---------- 8. G1 runDzySync（SQLite）----------
   { const dir = tmp(); const staff = [S0('S-001', '舊名', 'mala', { src: 'gf:A1', dzy: 'DZY001' }), S0('S-002', '測試乙', 'mzt', { src: 'js:J2', store: '金山', dzy: 'DZY002', lineHash: H1 })];

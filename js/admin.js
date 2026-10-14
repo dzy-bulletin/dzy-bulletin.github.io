@@ -214,8 +214,9 @@ var Admin = (function () {
           var stSel = L.STORES[s.unit] ? '<select class="inp stSel" data-st="' + esc(s.id) + '" style="width:auto;padding:4px 6px">' + (L.STORES[s.unit].indexOf(s.store) < 0 ? '<option value="" disabled selected>未分店</option>' : '') +
             L.STORES[s.unit].map(function (x) { return '<option' + (x === s.store ? ' selected' : '') + '>' + x + '</option>'; }).join('') + '</select>' : '';
           return '<div class="arow" style="display:flex;align-items:center;gap:8px;padding:8px 0;flex-wrap:wrap"><span style="flex:1">' + esc(s.name) + ' <small style="color:var(--sub)">' +
-            (s.locked ? '<span class="lockmark">🔒 已鎖定</span>' : s.hasPin ? '已設密碼' : '未設密碼') + '</small></span>' +
-            stSel + (s.hasPin ? '<button class="btn ghost small" data-rp="' + esc(s.id) + '">重設密碼</button>' : '') +
+            (s.locked ? '<span class="lockmark">🔒 已鎖定</span>' : s.hasPin ? '已設密碼' : s.codeExp ? '啟用碼 ' + L.fmtMD(L.today(new Date(s.codeExp))) + ' 前有效' : '未設密碼') + '</small></span>' +
+            stSel + (s.hasPin ? '<button class="btn ghost small" data-rp="' + esc(s.id) + '">重設密碼</button>' :
+              '<button class="btn ghost small" data-ic="' + esc(s.id) + '">' + (s.codeExp ? '重新產生啟用碼' : '產生啟用碼') + '</button>') +
             '<button class="btn ghost small" data-del="' + esc(s.id) + '">刪除</button></div>';
         }).join('') || '<div class="hint">尚無同仁</div>') + '</div>';
       }).join('') +
@@ -236,6 +237,18 @@ var Admin = (function () {
     s.querySelector('#stBack').onclick = function () { render(); };
   }
 
+  // 啟用碼只顯示這一次（後端只存雜湊）：主管當面告訴同仁、或複製貼到私訊
+  function showCode(name, d) {
+    var until = L.fmtMD(L.today(new Date(d.exp)));
+    var msg = name + ' 你好，你的「鼎兆元電子佈告欄」啟用碼：' + d.code + '（' + until + ' 前有效，只能用一次）。\n打開 https://dzy-bulletin.github.io → 選你的名字 →「第一次使用／主管給了啟用碼」→ 輸入啟用碼並設定自己的 4 位數密碼。';
+    var s = UI.sheet('<div class="bar"><b>' + esc(name) + ' 的啟用碼</b><button id="cdBack">完成</button></div><div class="body">' +
+      '<div id="codeVal" style="font-size:2.2rem;font-weight:700;letter-spacing:.3em;text-align:center;margin:8px 0">' + esc(d.code) + '</div>' +
+      '<div class="hint" style="margin:0 0 10px">' + until + ' 前有效、只能用一次，輸錯 3 次作廢。<b>這組碼只顯示這一次</b>，關掉就看不到了（忘了就再產生一組，舊的會作廢）。請只告訴本人。</div>' +
+      '<button class="btn primary" id="cdCopy">複製給同仁的訊息</button></div>');
+    s.querySelector('#cdCopy').onclick = function () { copyText(msg).then(function (ok) { if (ok) UI.toast('已複製，請私訊給本人'); else showText(msg); }); };
+    s.querySelector('#cdBack').onclick = function () { a.dirty = true; load(true); };
+  }
+
   /* ---------- 事件 ---------- */
   function act(btn, action, payload, okMsg, confirmMsg) {
     if (confirmMsg && !confirm(confirmMsg)) return;
@@ -245,6 +258,14 @@ var Admin = (function () {
       if (!r.ok) { if (r.code !== 'AUTH') UI.toast(r.message); return; }
       if (okMsg) UI.toast(okMsg);
       a.dirty = true; a.receipts = {}; load(true);
+    });
+  }
+  function codeAct(btn, action, st) {
+    var done = UI.busy(btn, '…');
+    API.admin(action, { staffId: st.id }).then(function (r) {
+      done();
+      if (!r.ok) { if (r.code !== 'AUTH') UI.toast(r.message); return; }
+      showCode(st.name, r.data);
     });
   }
   function bind(s) {
@@ -295,7 +316,17 @@ var Admin = (function () {
     };
     s.querySelectorAll('[data-rp]').forEach(function (b) {
       var st = a.data.staff.filter(function (x) { return x.id === b.dataset.rp; })[0];
-      b.onclick = function () { act(b, 'staffResetPin', { staffId: st.id }, '已重設，請通知 ' + st.name, '重設「' + st.name + '」的密碼？\n舊密碼立即失效，他已登入的手機也會被登出，下次選名字時設定新密碼。'); };
+      b.onclick = function () {
+        if (!confirm('重設「' + st.name + '」的密碼？\n舊密碼立即失效，他已登入的手機也會被登出。接著會產生一組啟用碼，請交給本人設定新密碼。')) return;
+        codeAct(b, 'staffResetPin', st);
+      };
+    });
+    s.querySelectorAll('[data-ic]').forEach(function (b) {
+      var st = a.data.staff.filter(function (x) { return x.id === b.dataset.ic; })[0];
+      b.onclick = function () {
+        if (st.codeExp && !confirm('「' + st.name + '」已經有一組還沒用的啟用碼，重新產生會讓舊的作廢。繼續？')) return;
+        codeAct(b, 'staffIssueCode', st);
+      };
     });
     s.querySelectorAll('[data-del]').forEach(function (b) {
       var st = a.data.staff.filter(function (x) { return x.id === b.dataset.del; })[0];

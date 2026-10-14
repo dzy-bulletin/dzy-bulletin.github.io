@@ -73,6 +73,8 @@ Apps Script Web App（madesiaosinla，以擁有者身分執行、任何人可呼
 | K | 來源（打卡系統） | `gf|cf|js:emp_id`（2026-09-29 追加，打卡同步用） |
 | L | 門市 | 墨竹亭同仁的門市（2026-09-30 追加） |
 | M | LINE 綁定（雜湊） | `lineHash`（2026-10-09 追加）：`SHA-256('dzyb-line:' + LINE userId)` 小寫 hex，空白＝沒綁。來源是打卡系統 roster 的 `line_user_id`，只在 Apps Script 內轉成雜湊，原始 userId 不離開 Apps Script。**任何 API 回應都不帶這一欄**；Mac mini 是正本時，鏡像寫回試算表的這一欄一律空白 |
+| N | 管理系統編號（dzy） | 見 v0.7.5 |
+| O | 啟用碼（雜湊） | `act`（2026-10-14 追加）：`到期毫秒.salt.SHA-256(salt+碼).輸錯次數`，空白＝沒有。碼本身只在產生當下回給主管一次；**任何 API 回應都不帶這一欄**，鏡像寫回試算表一律空白 |
 
 ### 分頁 3「已讀」
 | 欄 | 名稱 | 說明 |
@@ -96,10 +98,11 @@ Apps Script Web App（madesiaosinla，以擁有者身分執行、任何人可呼
 ## 三、身分與權限
 
 ### 同仁
-1. 打開網址 → 呼叫 `roster` 取得名單。名單只回 id、**遮罩後的姓名**、單位、是否已設密碼（見第六節拍板 1）。
-2. 點自己的名字：
-   - 還沒設密碼 → 設定密碼（`setPin`）。已經設過密碼的人，後端拒絕再用這個動作。
-   - 已設密碼 → 輸入密碼登入（`login`）。
+1. 打開網址 → 呼叫 `roster` 取得名單。名單只回 id、**遮罩後的姓名**、單位、門市、是否鎖定（2026-10-14 起**不回是否已設密碼**，外人看不出誰沒設）。
+2. 點自己的名字 → 輸入密碼登入（`login`）；後端回 `NO_PIN` 或本人點「第一次使用」→ 啟用畫面。
+   - 設定密碼（`setPin`）必須證明是本人（2026-10-14，補「外人可替沒設密碼的同仁搶設密碼」）：
+     ①帶登入憑證（沒密碼的人只可能是用打卡綁定的 LINE 登入拿到的）→ 不用碼；②主管給的一次性 6 位數啟用碼（7 天、用一次、輸錯 3 次作廢）。
+   - 已經設過密碼的人，後端拒絕再用這個動作。重設密碼＝清掉密碼＋同時產生啟用碼。
 3. 登入成功，後端發一張憑證：`staffId.pinVer.HMAC(TOKEN_SECRET, staffId|pinVer)`，存在手機的 localStorage。
    - **不需要另外的工作階段資料表。**
    - 重設密碼時 pinVer +1，舊憑證自動失效（等於把他的所有手機都登出）。
@@ -145,15 +148,15 @@ Apps Script Web App（madesiaosinla，以擁有者身分執行、任何人可呼
 
 | action | 需要 | 參數 | 回傳 data |
 |---|---|---|---|
-| `roster` | — | — | `[{id, name(遮罩), unit, store, hasPin, locked}]`（只列在職；Code.js 以 CacheService 快取結果 10 分鐘，世代換了即失效） |
-| `setPin` | — | `staffId, pin` | `{token, me, board}`（board 同 `board` 回傳，登入少一次往返） |
+| `roster` | — | — | `[{id, name(遮罩), unit, store, locked}]`（只列在職；Code.js 以 CacheService 快取結果 10 分鐘，世代換了即失效） |
+| `setPin` | — 或同仁憑證 | `staffId, pin, code`（啟用碼）或 `token, pin`（LINE 登入後） | `{token, me, board}`（board 同 `board` 回傳，登入少一次往返）；錯誤 `NEED_CODE`（沒碼／碼過期／作廢）、`BAD_CODE`（附 `left`）、`CODE_DEAD`、`HAS_PIN`；成功寫操作紀錄「設定密碼」（註明啟用碼或 LINE） |
 | `login` | — | `staffId, pin` | `{token, me, board}`；錯誤時 code＝`BAD_PIN`（附剩餘次數）／`LOCKED`（需主管重設） |
-| `lineLogin` | — | `idToken`（LIFF 的 LINE ID token）, `staffId?`（對到多人時本人選的那位） | 對到一人：`{token, me, board}`（同 `login`）；多人且沒帶 staffId：`{choices:[{id, name(遮罩), unit}]}`；錯誤 code＝`LINE_NOT_LINKED`（對不到在職同仁，或 staffId 不在對到的人裡）／`LINE_BAD`（LINE 驗證失敗）／`LINE_DOWN`（連不上 LINE）／`BUSY`（Mac mini 限流：每 IP 每分鐘 10 次、全體 120 次）。寫入類動作（上鎖），但不寫任何資料；不記錄 idToken 與 LINE userId |
+| `lineLogin` | — | `idToken`（LIFF 的 LINE ID token）, `staffId?`（對到多人時本人選的那位） | 對到一人：`{token, me, board, needPin}`（同 `login`，needPin＝還沒設密碼，前端顯示選用的「設定密碼」）；多人且沒帶 staffId：`{choices:[{id, name(遮罩), unit}]}`；錯誤 code＝`LINE_NOT_LINKED`（對不到在職同仁，或 staffId 不在對到的人裡）／`LINE_BAD`（LINE 驗證失敗）／`LINE_DOWN`（連不上 LINE）／`BUSY`（Mac mini 限流：每 IP 每分鐘 10 次、全體 120 次）。寫入類動作（上鎖），但不寫任何資料；不記錄 idToken 與 LINE userId |
 | `board` | 同仁憑證 | — | `{today, me, posts:[上架中，三個單位全部], myReads:{postId: 簽名時間}}` |
 | `history` | 同仁憑證 | — | `{today, posts:[已下架], myReads:{postId: 簽名時間}}` |
 | `ack` | 同仁憑證 | `postId, sig` | `{at}`；已經簽過回 code＝`ALREADY` |
 | `adminLogin` | — | `pass` | `{atoken, data}`（data 同 `adminData`） |
-| `adminData` | 管理憑證 | — | `{today, posts:[每則含 status、readCount、targetCount], staff:[{id,name(全名),unit,store,hasPin,locked}], quota:{limit,usage}\|null}` |
+| `adminData` | 管理憑證 | — | `{today, posts:[每則含 status、readCount、targetCount], staff:[{id,name(全名),unit,store,hasPin,locked,codeExp}]（codeExp＝還沒用的啟用碼到期時間，沒有＝空字串）, quota:{limit,usage}\|null}` |
 | `receipts` | 管理憑證 | `postId` | `{rows:[{staffId, name, unit, active, inTarget, read, at, sig}]}`（應讀名單＋不在應讀名單但簽過的人；`active`＝同仁是否在職，`inTarget`＝是否屬於公告目前的單位；簽名圖只在展開時才載入） |
 | `uploadFile` | 管理憑證 | `name, data(base64)`（類型與 MIME 一律由後端依副檔名判斷） | `{id, name, type, size}` |
 | `savePost` | 管理憑證 | `post:{id?, title, body, units, publishOn, expiresOn, pinned, files}`, `reqId`（冪等鍵，綁一份草稿：同 reqId＋同內容指紋＝重送，回傳第一次結果；同 reqId 但內容不同＝改為編輯第一次建立的那則；6 小時內有效） | `{post}` |
@@ -162,7 +165,8 @@ Apps Script Web App（madesiaosinla，以擁有者身分執行、任何人可呼
 | `staffAdd` | 管理憑證 | `name, unit, store`（墨竹亭必填：光復／金山／六張犁；其他單位忽略） | `{staff}` |
 | `staffSetStore` | 管理憑證 | `staffId, store`（只限墨竹亭同仁） | — |
 | `staffDelete` | 管理憑證 | `staffId` | — |
-| `staffResetPin` | 管理憑證 | `staffId` | — |
+| `staffResetPin` | 管理憑證 | `staffId` | `{code, exp, staff}`（2026-10-14：清密碼＋產生啟用碼，碼只回這一次） |
+| `staffIssueCode` | 管理憑證 | `staffId` | `{code, exp, staff}`（還沒設密碼的人；再按＝舊碼作廢；已有密碼回 `HAS_PIN`） |
 | `syncClock` | 管理憑證 | — | `{added:[姓名（單位）], adopted, left:[{id,name,unit}], counts:{來源:在職人數}, errors:[]}`（2026-09-29 追加：從小辛辣光復、央廚、墨竹亭金山打卡系統 roster 唯讀同步；只新增，打卡已離職者只列出不刪；同仁表新增「來源」欄 `src`＝`gf|cf|js:emp_id`；2026-10-09 起同時更新 `lineHash`：在職→打卡名單的綁定、離職或沒綁→清空，讀取失敗的那店不動） |
 
 - 所有寫入都用 `LockService` 排隊，避免兩個人同時上架時流水號重複。

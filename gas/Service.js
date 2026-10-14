@@ -40,6 +40,22 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify, opts) 
     if (!auth.verifyAdminToken(store.secret(), req.atoken, a.ver, clock.nowMs())) throw err('AUTH', '請重新輸入管理通行碼');
     return a;
   }
+  // 啟用碼（2026-10-14 補「外人可替沒設密碼的同仁搶設密碼」）：存在同仁的 act 欄＝'到期毫秒.salt.雜湊.輸錯次數'；
+  // 碼本身只在產生當下回給主管一次，資料庫只有雜湊
+  function actOf(s) {
+    var p = String(s.act || '').split('.');
+    if (p.length !== 4 || !(Number(p[0]) > 0)) return null;
+    return { exp: Number(p[0]), salt: p[1], hash: p[2], fail: Number(p[3]) || 0 };
+  }
+  function codeExp(s) { var a = actOf(s); return a && a.exp > clock.nowMs() && a.fail < L.CODE_MAX_FAIL ? new Date(a.exp).toISOString() : ''; }
+  function issueCode(s) {
+    var code = auth.newCode(), salt = auth.newSalt(), exp = clock.nowMs() + L.CODE_TTL_MS;
+    s.act = exp + '.' + salt + '.' + auth.hashPin(salt, code) + '.0';
+    return { code: code, exp: new Date(exp).toISOString() };
+  }
+  function adminRow(s) {
+    return { id: s.id, name: s.name, unit: s.unit, store: s.store || '', hasPin: !!s.pinHash, locked: (Number(s.fail) || 0) >= L.STAFF_MAX_FAIL, codeExp: s.pinHash ? '' : codeExp(s) };
+  }
   function withStatus(p, td) { var o = Object.assign({}, p); o.status = L.status(p, td); return o; }
   function myReadIds(sid) {
     return store.getReads().filter(function (r) { return r.staffId === sid; }).map(function (r) { return r.postId; });
@@ -82,23 +98,38 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify, opts) 
   }
 
   var H = {
+    // 不回 hasPin（2026-10-14）：不讓沒登入的人看出誰還沒設密碼
     roster: function () {
       return store.getStaff().filter(function (s) { return s.active; }).map(function (s) {
-        return { id: s.id, name: L.maskName(s.name), unit: s.unit, store: s.store || '', hasPin: !!s.pinHash, locked: (Number(s.fail) || 0) >= L.STAFF_MAX_FAIL };
+        return { id: s.id, name: L.maskName(s.name), unit: s.unit, store: s.store || '', locked: (Number(s.fail) || 0) >= L.STAFF_MAX_FAIL };
       });
     },
+    // 設密碼必須證明是本人（2026-10-14）：①帶登入憑證（沒密碼的人只可能是剛用打卡綁定的 LINE 登入）或 ②主管給的啟用碼
     setPin: function (q) {
-      var s = findStaff(q.staffId);
+      var viaLine = !!q.token, s = viaLine ? staffOf(q) : findStaff(q.staffId);
       if (s.pinHash) throw err('HAS_PIN', '已經設定過密碼');
       var bad = L.pinProblem(q.pin);
       if (bad) throw err(bad, bad === 'WEAK_PIN' ? '太好猜了（如 1111、1234），請換一組' : '請輸入 4 位數字');
-      s.salt = auth.newSalt(); s.pinHash = auth.hashPin(s.salt, q.pin); s.pinVer = (Number(s.pinVer) || 0) + 1; s.fail = 0;
+      if (!viaLine) {
+        var a = actOf(s);
+        if (!a || a.exp <= clock.nowMs() || a.fail >= L.CODE_MAX_FAIL || !q.code) throw err('NEED_CODE', '請從 LINE「鼎兆元打卡」選單點佈告欄進來，或請主管到「設定→同仁名單」幫你產生啟用碼');
+        if (!auth.safeEq(auth.hashPin(a.salt, String(q.code || '')), a.hash)) {
+          a.fail++;
+          var dead = a.fail >= L.CODE_MAX_FAIL;
+          s.act = dead ? '' : [a.exp, a.salt, a.hash, a.fail].join('.');
+          store.saveStaff(s);
+          var e = err(dead ? 'CODE_DEAD' : 'BAD_CODE', dead ? '啟用碼輸錯太多次已作廢，請主管重新產生' : '啟用碼不對（還可以試 ' + (L.CODE_MAX_FAIL - a.fail) + ' 次）');
+          e.left = L.CODE_MAX_FAIL - a.fail; throw e;
+        }
+      }
+      s.salt = auth.newSalt(); s.pinHash = auth.hashPin(s.salt, q.pin); s.pinVer = (Number(s.pinVer) || 0) + 1; s.fail = 0; s.act = '';
       store.saveStaff(s);
+      log('設定密碼', s.id, s.name + (viaLine ? '（LINE 登入後設定）' : '（啟用碼）'));   // 留下誰、何時、用哪種方式設的
       return { token: auth.makeStaffToken(store.secret(), s.id, s.pinVer), me: me(s), board: boardFor(s) };
     },
     login: function (q) {
       var s = findStaff(q.staffId);
-      if (!s.pinHash) throw err('BAD_REQ', '尚未設定密碼');
+      if (!s.pinHash) throw err('NO_PIN', '尚未設定密碼');
       var r = auth.staffLogin(s, String(q.pin || ''));
       if (r.fail !== (Number(s.fail) || 0)) { s.fail = r.fail; store.saveStaff(s); }
       if (!r.ok) {
@@ -127,7 +158,7 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify, opts) 
       if (all.length > 1 && staffSource === 'dzy') throw err('LINE_AMBIGUOUS', 'LINE 登入對到不只一位同仁，請選你的名字登入');
       if (hits.length > 1) return { choices: hits.map(function (s) { return { id: s.id, name: L.maskName(s.name), unit: s.unit }; }) };
       var s = hits[0];
-      return { token: auth.makeStaffToken(store.secret(), s.id, s.pinVer), me: me(s), board: boardFor(s) };
+      return { token: auth.makeStaffToken(store.secret(), s.id, s.pinVer), me: me(s), board: boardFor(s), needPin: !s.pinHash };
     },
     board: function (q) { return boardFor(staffOf(q)); },
     history: function (q) {
@@ -187,9 +218,7 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify, opts) 
         o.targetCount = tg.length;
         return o;
       });
-      var staff = store.getStaff().filter(function (s) { return s.active; }).map(function (s) {
-        return { id: s.id, name: s.name, unit: s.unit, store: s.store || '', hasPin: !!s.pinHash, locked: (Number(s.fail) || 0) >= L.STAFF_MAX_FAIL };
-      });
+      var staff = store.getStaff().filter(function (s) { return s.active; }).map(adminRow);
       mark();
       var quota = null;
       try { quota = files.quota(); } catch (e) { quota = null; }
@@ -286,7 +315,7 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify, opts) 
       if (all.some(function (s) { return s.active && s.name === name && s.unit === q.unit; })) throw err('BAD_REQ', '此單位已有同名同仁');
       var s = { id: nextId('S-', all, 3), name: name, unit: q.unit, pinHash: '', salt: '', pinVer: 0, fail: 0, active: true, createdAt: iso(), deletedAt: '', src: '', store: st, lineHash: '' };
       store.saveStaff(s); log('新增同仁', s.id, name + '（' + L.STAFF_UNIT_NAME[s.unit] + (st ? st : '') + '）');
-      return { staff: { id: s.id, name: s.name, unit: s.unit, store: st, hasPin: false, locked: false } };
+      return { staff: adminRow(s) };
     },
     staffSetStore: function (q) {
       requireAdmin(q);
@@ -371,10 +400,21 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify, opts) 
       var s = findStaff(q.staffId); s.active = false; s.deletedAt = iso(); store.saveStaff(s);
       log('刪除同仁', s.id, s.name); return {};
     },
+    // 重設密碼＝清掉密碼＋同時產生啟用碼（碼只回這一次）；沒有碼就設不了新密碼，外人搶不走
     staffResetPin: function (q) {
       requireAdmin(q);
-      var s = findStaff(q.staffId); s.pinHash = ''; s.salt = ''; s.pinVer = (Number(s.pinVer) || 0) + 1; s.fail = 0; store.saveStaff(s);
-      log('重設密碼', s.id, s.name); return {};
+      var s = findStaff(q.staffId);
+      s.pinHash = ''; s.salt = ''; s.pinVer = (Number(s.pinVer) || 0) + 1; s.fail = 0;
+      var c = issueCode(s); store.saveStaff(s);
+      log('重設密碼', s.id, s.name + '（已產生啟用碼）'); return { code: c.code, exp: c.exp, staff: adminRow(s) };
+    },
+    // 還沒設密碼的同仁（沒綁 LINE 打卡、或剛重設）：主管產生啟用碼；再按一次＝舊碼作廢、換新碼
+    staffIssueCode: function (q) {
+      requireAdmin(q);
+      var s = findStaff(q.staffId);
+      if (s.pinHash) throw err('HAS_PIN', '這位同仁已經設定過密碼；忘記密碼請按「重設密碼」');
+      var c = issueCode(s); store.saveStaff(s);
+      log('產生啟用碼', s.id, s.name); return { code: c.code, exp: c.exp, staff: adminRow(s) };
     },
   };
 
@@ -401,7 +441,7 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify, opts) 
       return { ok: false, code: 'SERVER', message: '系統忙碌，請稍後再試' };
     }
   }
-  return { call: call, WRITE_ACTIONS: ['setPin', 'login', 'ack', 'adminLogin', 'savePost', 'setPublished', 'setPinned', 'staffAdd', 'staffDelete', 'staffResetPin', 'syncClock', 'staffSetStore', 'lineLogin'] };   // uploadFile 不碰試算表，不上鎖
+  return { call: call, WRITE_ACTIONS: ['setPin', 'login', 'ack', 'adminLogin', 'savePost', 'setPublished', 'setPinned', 'staffAdd', 'staffDelete', 'staffResetPin', 'staffIssueCode', 'syncClock', 'staffSetStore', 'lineLogin'] };   // uploadFile 不碰試算表，不上鎖
 }
 
 if (typeof module !== 'undefined') module.exports = { makeService_: makeService_ };

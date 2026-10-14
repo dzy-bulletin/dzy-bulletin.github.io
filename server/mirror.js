@@ -387,7 +387,7 @@ async function runMirror(o) {
     try {
       data = { posts: J.rows(db, 'SELECT json FROM posts ORDER BY rowid').map((r) => JSON.parse(r.json)) };
       if (o._betweenReads) o._betweenReads();
-      data.staff = J.rows(db, 'SELECT json FROM staff ORDER BY rowid').map((r) => { const x = JSON.parse(r.json); delete x.lineHash; return x; });   // LINE 綁定雜湊不進試算表
+      data.staff = J.rows(db, 'SELECT json FROM staff ORDER BY rowid').map((r) => { const x = JSON.parse(r.json); delete x.lineHash; delete x.act; return x; });   // LINE 綁定雜湊、啟用碼不進試算表
       data.reads = J.rows(db, 'SELECT postId, staffId, name, unit, at, sigId, driveSigId FROM reads ORDER BY rowid');
       data.log = J.rows(db, 'SELECT at, action, target, summary FROM log ORDER BY seq');
       left = J.rows(db, TODO_SQL);

@@ -315,7 +315,8 @@ function makeApp(cfg) {
       const salt = x.pin ? auth.newSalt() : '';
       return { id: x.id, name: x.name, unit: x.unit, salt, pinHash: x.pin ? auth.hashPin(salt, x.pin) : '', pinVer: 1, fail: x.fail || 0,
         active: true, createdAt: '2026-01-01T00:00:00.000Z', deletedAt: '', src: x.src || '', store: x.store || '',
-        lineHash: x.lineUid ? auth.lineHash(x.lineUid) : '' };
+        lineHash: x.lineUid ? auth.lineHash(x.lineUid) : '',
+        act: x.code ? (() => { const s2 = auth.newSalt(); return '4102444800000.' + s2 + '.' + auth.hashPin(s2, x.code) + '.0'; })() : '' };   // 帶入的 code＝還沒用的啟用碼
     });
     const posts = d.posts.map((p) => Object.assign({ body: '', expiresOn: '', pinned: false, published: true, offOn: '', files: [],
       createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' }, p));

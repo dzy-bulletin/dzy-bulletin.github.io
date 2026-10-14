@@ -35,16 +35,34 @@ const call = (a, q) => { seen.add(a); return C(a, q); };
 let r = call('roster');
 eq('roster ok', r.ok, true);
 eq('roster masked', r.data.find(s => s.id === 'S-001').name, '陳O安');
-eq('roster no hash leak', Object.keys(r.data[0]).sort(), ['hasPin', 'id', 'locked', 'name', 'store', 'unit']);
-eq('tester no pin', r.data.find(s => s.id === 'S-013').hasPin, false);
+eq('roster no hash leak（也不回 hasPin：外人看不出誰沒設密碼）', Object.keys(r.data[0]).sort(), ['id', 'locked', 'name', 'store', 'unit']);
 
 // board 不帶憑證
 eq('board no token', call('board', {}).code, 'AUTH');
 
-// setPin
-eq('setPin weak', call('setPin', { staffId: 'S-013', pin: '1234' }).code, 'WEAK_PIN');
-eq('setPin bad', call('setPin', { staffId: 'S-013', pin: '12' }).code, 'BAD_REQ');
-r = call('setPin', { staffId: 'S-013', pin: '2580' });
+// setPin：要證明是本人（主管給的啟用碼，或 LINE 登入後的憑證；2026-10-14 補搶設密碼缺口）
+eq('setPin 沒啟用碼 → NEED_CODE（外人不能替人設密碼）', call('setPin', { staffId: 'S-013', pin: '2580' }).code, 'NEED_CODE');
+eq('setPin 亂猜碼 → BAD_CODE（示範資料測試員已有主管產生的啟用碼 246810）', call('setPin', { staffId: 'S-013', pin: '2580', code: '000000' }).code, 'BAD_CODE');
+{ const a0 = C('adminLogin', { pass: '1234' }).data.atoken;
+  eq('staffIssueCode 要主管', call('staffIssueCode', { staffId: 'S-013' }).code, 'AUTH');
+  let ic = call('staffIssueCode', { atoken: a0, staffId: 'S-013' });
+  eq('staffIssueCode 回 6 位數碼、7 天後到期', [ic.ok, /^\d{6}$/.test(ic.data.code), Math.round((Date.parse(ic.data.exp) - Date.now()) / 86400e3)], [true, true, 7]);
+  eq('adminData 看得到啟用碼期限、看不到碼', (() => { const x = C('adminData', { atoken: a0 }).data.staff.find(s => s.id === 'S-013'); return [x.hasPin, x.codeExp === ic.data.exp, JSON.stringify(x).includes(ic.data.code)]; })(), [false, true, false]);
+  const wrong = ic.data.code === '111111' ? '222222' : '111111';
+  eq('setPin weak（不吃啟用碼次數）', call('setPin', { staffId: 'S-013', pin: '1234', code: wrong }).code, 'WEAK_PIN');
+  eq('setPin bad', call('setPin', { staffId: 'S-013', pin: '12', code: ic.data.code }).code, 'BAD_REQ');
+  r = call('setPin', { staffId: 'S-013', pin: '2580', code: wrong }); eq('碼錯 1', [r.code, r.left], ['BAD_CODE', 2]);
+  r = call('setPin', { staffId: 'S-013', pin: '2580', code: wrong }); eq('碼錯 2', [r.code, r.left], ['BAD_CODE', 1]);
+  r = call('setPin', { staffId: 'S-013', pin: '2580', code: wrong }); eq('碼錯 3 → 作廢', r.code, 'CODE_DEAD');
+  eq('作廢後正確的碼也不能用', call('setPin', { staffId: 'S-013', pin: '2580', code: ic.data.code }).code, 'NEED_CODE');
+  const old = call('staffIssueCode', { atoken: a0, staffId: 'S-013' }).data.code;
+  ic = call('staffIssueCode', { atoken: a0, staffId: 'S-013' });
+  if (old !== ic.data.code) eq('重新產生 → 舊碼作廢', call('setPin', { staffId: 'S-013', pin: '2580', code: old }).code, 'BAD_CODE');
+  r = call('setPin', { staffId: 'S-013', pin: '2580', code: ic.data.code });
+  eq('別人的碼不能用', call('setPin', { staffId: 'S-014', pin: '2580', code: ic.data.code === '246810' ? '000000' : ic.data.code }).code, 'BAD_CODE');
+  eq('設好之後 adminData 沒有啟用碼期限', C('adminData', { atoken: a0 }).data.staff.find(s => s.id === 'S-013').codeExp, '');
+  eq('已設密碼的人不能產生啟用碼', call('staffIssueCode', { atoken: a0, staffId: 'S-013' }).code, 'HAS_PIN');
+}
 eq('setPin ok', [r.ok, r.data.me], [true, { id: 'S-013', name: '測試員甲', unit: 'mala' }]);
 eq('setPin returns board', Array.isArray(r.data.board.posts) && r.data.board.me.id === 'S-013', true);
 const tok = r.data.token;
@@ -98,9 +116,12 @@ eq('receipts rows', r.data.rows.length, 6);
 eq('receipts read', r.data.rows.filter(x => x.read).map(x => x.staffId).sort(), ['S-001', 'S-013']);
 
 // 重設密碼 → 舊憑證失效、解鎖
-eq('reset', call('staffResetPin', { atoken: at, staffId: 'S-013' }).ok, true);
+r = call('staffResetPin', { atoken: at, staffId: 'S-013' });
+eq('reset 回啟用碼', [r.ok, /^\d{6}$/.test(r.data.code), r.data.staff.hasPin, r.data.staff.codeExp === r.data.exp], [true, true, false, true]);
 eq('old token dead', C('board', { token: tok }).code, 'AUTH');
-eq('roster after reset', C('roster').data.find(s => s.id === 'S-013'), { id: 'S-013', name: '測OO甲', unit: 'mala', store: '', hasPin: false, locked: false });
+eq('roster after reset', C('roster').data.find(s => s.id === 'S-013'), { id: 'S-013', name: '測OO甲', unit: 'mala', store: '', locked: false });
+eq('重設後外人不能搶設密碼', C('setPin', { staffId: 'S-013', pin: '1357' }).code, 'NEED_CODE');
+eq('重設後本人用啟用碼設新密碼', C('setPin', { staffId: 'S-013', pin: '1357', code: r.data.code }).ok, true);
 
 // 上傳＋上架
 eq('upload bad type', call('uploadFile', { atoken: at, name: 'a.png', data: 'AAAA' }).code, 'BAD_TYPE');
@@ -180,7 +201,7 @@ eq('old pass rejected', C('adminLogin', { pass: '1234' }).code, 'AUTH');
 eq('ADMIN_INIT consumed', C('adminLogin', { pass: 'pass5678' }).ok, true);
 
 // C15 總部：看得到／要簽
-{ const tk = id => { C('staffResetPin', { atoken: C('adminLogin', { pass: 'pass5678' }).data.atoken, staffId: id }); return C('setPin', { staffId: id, pin: '2580' }).data.token; };
+{ const tk = id => { const code = C('staffResetPin', { atoken: C('adminLogin', { pass: 'pass5678' }).data.atoken, staffId: id }).data.code; return C('setPin', { staffId: id, pin: '2580', code }).data.token; };
   const dzy = tk('S-016'), hmzt = tk('S-017'), hmala = tk('S-018');
   const ids = t => C('board', { token: t }).data.posts.map(p => p.id);
   eq('hq-dzy sees cf post', ids(dzy).includes('P-20260927-001'), true);
@@ -231,7 +252,7 @@ eq('unknown action', C('hack', {}).code, 'BAD_REQ');
 { const code = require('fs').readFileSync(__dirname + '/../gas/Code.js', 'utf8'); const m = /var WRITE_ACTIONS_ = (\[[^\]]*\])/.exec(code);
   const svcW = require('../gas/Service.js').makeService_(DZYB, {}, {}, {}, {}).WRITE_ACTIONS;
   eq('Code.js WRITE_ACTIONS_ matches Service', JSON.stringify(eval(m[1]).sort()), JSON.stringify(svcW.slice().sort())); }
-eq('all 19 actions covered', seen.size, 19);
+eq('all 20 actions covered', seen.size, 20);
 
 // （放最後：會把管理登入鎖住）
 M.setAdminInit('abc');
@@ -251,7 +272,8 @@ eq('pending init locked after 5 wrong', C('adminLogin', { pass: 'newpass88' }).c
   const nc = { sha256Hex: (x) => crypto.createHash('sha256').update(x, 'utf8').digest('hex'),
     hmacB64url: (k, m) => crypto.createHmac('sha256', Buffer.from(k, 'utf8')).update(m, 'utf8').digest('base64url'), randomHex: (n) => crypto.randomBytes(n).toString('hex') };
   const sv = makeService_(DZYB, st, {}, makeAuth_(nc, DZYB), { nowMs: () => Date.now(), today: () => DZYB.today() });
-  const tk = sv.call('setPin', { staffId: 'S-900', pin: '2580' }).data.token;
+  const st900 = st.getStaff().find((x) => x.id === 'S-900');
+  const tk = (() => { const A = makeAuth_(nc, DZYB), salt = A.newSalt(); st900.act = (Date.now() + 60e3) + '.' + salt + '.' + A.hashPin(salt, '123456') + '.0'; st.saveStaff(st900); return sv.call('setPin', { staffId: 'S-900', pin: '2580', code: '123456' }).data.token; })();
   const ackR = sv.call('ack', { token: tk, postId: '../x', sig: 'data:image/png;base64,iVBORw0K' }); eq('sig traversal ack ok', ackR.ok ? true : ackR, true);
   st.addRead({ postId: '../x', staffId: '../../y', name: 'y', unit: 'mala', at: '', sig: 'data:image/jpeg;base64,/9j/' });   // staffId 也帶 ../（直接打 store）
   const files = fs.readdirSync(path.join(data, 'sigs'));
@@ -259,6 +281,28 @@ eq('pending init locked after 5 wrong', C('adminLogin', { pass: 'newpass88' }).c
   eq('sig traversal nothing outside', fs.readdirSync(dir).concat(fs.readdirSync(data)).filter((f) => /\.(png|jpg)$/.test(f)), []);
   eq('sig traversal readable', [typeof st.getSigs('../x')['S-900'], typeof st.getSigs('../x')['../../y']], ['string', 'string']);
   st.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+
+// 啟用碼 7 天到期（可控時鐘、記憶體 store）
+if (process.env.DRIVER !== 'server') {
+  const crypto = require('crypto');
+  let now = Date.parse('2026-10-14T00:00:00Z');
+  const staff = [{ id: 'S-1', name: '甲', unit: 'mala', pinHash: '', salt: '', pinVer: 0, fail: 0, active: true }], logs = [];
+  const admin = { hash: '', salt: '', ver: 1, fail: 0, lockUntil: 0 };
+  const mem = { getStaff: () => staff, saveStaff: () => {}, addLog: (e) => logs.push(e), secret: () => 'sec', getPosts: () => [], getReads: () => [], getAdmin: () => admin, setAdmin: () => {} };
+  const nc = { sha256Hex: (x) => crypto.createHash('sha256').update(x, 'utf8').digest('hex'),
+    hmacB64url: (k, m) => crypto.createHmac('sha256', Buffer.from(k, 'utf8')).update(m, 'utf8').digest('base64url'), randomHex: (n) => crypto.randomBytes(n).toString('hex') };
+  const A = makeAuth_(nc, DZYB);
+  const sv = makeService_(DZYB, mem, {}, A, { nowMs: () => now, today: () => DZYB.today(new Date(now)) });
+  const atk = A.makeAdminToken('sec', 1, now + 30 * 86400e3);
+  let c = sv.call('staffIssueCode', { atoken: atk, staffId: 'S-1' }).data.code;
+  now += 7 * 86400e3 - 1000;
+  eq('啟用碼：7 天內還有效（期限前 1 秒）', sv.call('adminData', { atoken: atk }).data.staff[0].codeExp !== '', true);
+  now += 2000;
+  eq('啟用碼：過了 7 天 → NEED_CODE、主管畫面不再顯示期限', [sv.call('setPin', { staffId: 'S-1', pin: '2580', code: c }).code, sv.call('adminData', { atoken: atk }).data.staff[0].codeExp], ['NEED_CODE', '']);
+  c = sv.call('staffIssueCode', { atoken: atk, staffId: 'S-1' }).data.code;
+  eq('重新產生後可用，紀錄有產生與設定兩筆', [sv.call('setPin', { staffId: 'S-1', pin: '2580', code: c }).ok, logs.map((e) => e.action)], [true, ['產生啟用碼', '產生啟用碼', '設定密碼']]);
+  eq('碼不進紀錄', JSON.stringify(logs).includes(c), false);
+}
 
 console.log(`service${process.env.DRIVER === 'server' ? '（伺服器）' : ''}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
