@@ -14,6 +14,8 @@ function makeAuth_(c, rules) {
     return r === 0;
   }
   function newSalt() { return c.randomHex(16); }
+  // 啟用碼：6 位數字（4 bytes 取餘數，偏差可忽略）
+  function newCode() { var n = parseInt(c.randomHex(4), 16) % 1000000; return ('00000' + n).slice(-6); }
   // LINE userId（verify 回來的 sub）→ 同仁表的 lineHash；三個後端輸出必須相同（test/line.test.js 測試向量）
   function lineHash(sub) { return c.sha256Hex((rules.LINE_HASH_PREFIX || 'dzyb-line:') + String(sub)); }
   function hashPin(salt, pin) { return c.sha256Hex(salt + pin); }            // C8
@@ -65,7 +67,7 @@ function makeAuth_(c, rules) {
   }
 
   return {
-    newSalt: newSalt, hashPin: hashPin, safeEq: safeEq, lineHash: lineHash,
+    newSalt: newSalt, newCode: newCode, hashPin: hashPin, safeEq: safeEq, lineHash: lineHash,
     makeStaffToken: makeStaffToken, verifyStaffToken: verifyStaffToken, staffIdOf: staffIdOf,
     makeAdminToken: makeAdminToken, verifyAdminToken: verifyAdminToken,
     staffLogin: staffLogin, adminLogin: adminLogin

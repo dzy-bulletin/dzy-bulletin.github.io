@@ -9,6 +9,7 @@ var DZYB_DEMO = function (L) {
     ['S-013', '測試員甲', 'mala'], ['S-014', '測試員乙', 'mzt', '光復'], ['S-015', '測試員丙', 'cf'],
     ['S-016', '周總經理', 'hq-dzy'], ['S-017', '孫品牌經理', 'hq-mzt'], ['S-018', '趙營運督導', 'hq-mala']
   ].map(function (r) { return { id: r[0], name: r[1], unit: r[2], store: r[3] || '', pin: r[1].indexOf('測試員') === 0 ? null : '0000', fail: 0,
+    code: r[1].indexOf('測試員') === 0 ? '246810' : '',   // 測試員：主管已產生的啟用碼（第一次使用時輸入）
     lineUid: r[0] === 'S-001' ? 'U-demo-001' : '' }; });   // lineUid＝模擬打卡系統綁定的 LINE（本機預覽：line.html?mode=local&test_uid=U-demo-001）
   var F = function (id, name, mb) { return { id: id, name: name, type: L.fileType(name), size: Math.round(mb * 1048576) }; };
   var P = function (o) { return Object.assign({ published: true, offOn: '', expiresOn: '', pinned: false, files: [], body: '' }, o); };

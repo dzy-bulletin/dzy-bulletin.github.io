@@ -6,10 +6,11 @@ var SHEETS_ = {
   posts: { name: '公告', cols: ['id', 'title', 'body', 'units', 'publishOn', 'expiresOn', 'pinned', 'published', 'offOn', 'files', 'createdAt', 'updatedAt'],
     head: ['id', '標題', '內容', '單位', '上架日', '到期日', '置頂', '上架中', '手動下架日', '附件', '建立時間', '最後修改時間'] },
   // lineHash（2026-10-09，LINE 自動登入）、dzy（管理系統 emp_no，同仁名單改讀管理系統）：欄位只能加在最後、不可重排；沒有這一欄的舊表讀到空字串（write 會自動補表頭）
-  staff: { name: '同仁', cols: ['id', 'name', 'unit', 'pinHash', 'salt', 'pinVer', 'fail', 'active', 'createdAt', 'deletedAt', 'src', 'store', 'lineHash', 'dzy'],
-    head: ['id', '姓名', '單位', '密碼雜湊', 'salt', '密碼版本', '連續錯誤次數', '在職', '建立時間', '刪除時間', '來源（打卡系統）', '門市', 'LINE 綁定（雜湊）', '管理系統編號（dzy）'] },
+  staff: { name: '同仁', cols: ['id', 'name', 'unit', 'pinHash', 'salt', 'pinVer', 'fail', 'active', 'createdAt', 'deletedAt', 'src', 'store', 'lineHash', 'dzy', 'act'],
+    head: ['id', '姓名', '單位', '密碼雜湊', 'salt', '密碼版本', '連續錯誤次數', '在職', '建立時間', '刪除時間', '來源（打卡系統）', '門市', 'LINE 綁定（雜湊）', '管理系統編號（dzy）', '啟用碼（雜湊，2026-10-14）'] },
   // 名單快照欄位定義（寫在獨立的公開名單試算表，見 snapBook_；setup 不在主試算表建這個分頁）
-  snap: { name: '名單快照', cols: ['id', 'name', 'unit', 'store', 'hasPin', 'locked'], head: ['id', 'name', 'unit', 'store', 'hasPin', 'locked'] },
+  // 2026-10-14 拿掉 hasPin（公開名單看不出誰沒設密碼）；前端 parseCsv 表頭不符就退回後端 roster
+  snap: { name: '名單快照', cols: ['id', 'name', 'unit', 'store', 'locked'], head: ['id', 'name', 'unit', 'store', 'locked'] },
   reads: { name: '已讀', cols: ['postId', 'staffId', 'name', 'unit', 'at', 'sigId'],
     head: ['公告 id', '同仁 id', '姓名', '單位', '簽名時間', '簽名檔 id'] },
   log: { name: '操作紀錄', cols: ['at', 'action', 'target', 'summary'], head: ['時間', '動作', '對象', '摘要'] }
@@ -69,12 +70,14 @@ function snapBook_() {
 function writeSnap_(staffRows) {
   var def = SHEETS_.snap, bk = snapBook_(), sh = bk.getSheetByName(def.name) || bk.insertSheet(def.name);
   var rows = [def.head].concat(staffRows.filter(function (r) { return r.id && bool_(r.active); }).map(function (r) {
-    return [r.id, DZYB.maskName(r.name), r.unit, r.store || '', r.pinHash ? 'Y' : '', (Number(r.fail) || 0) >= DZYB.STAFF_MAX_FAIL ? 'Y' : ''];
+    return [r.id, DZYB.maskName(r.name), r.unit, r.store || '', (Number(r.fail) || 0) >= DZYB.STAFF_MAX_FAIL ? 'Y' : ''];
   }));
   if (rows.length > sh.getMaxRows()) sh.insertRowsAfter(sh.getMaxRows(), rows.length - sh.getMaxRows() + 50);
   sh.getRange(1, 1, rows.length, def.cols.length).setNumberFormat('@').setValues(rows);           // 先覆寫再清尾端，不留空快照空窗
   var last = sh.getLastRow();
   if (last > rows.length) sh.getRange(rows.length + 1, 1, last - rows.length, def.cols.length).clearContent();
+  var extra = sh.getLastColumn() - def.cols.length;                 // 舊版多一欄 hasPin：清掉多出來的欄，不留舊資料
+  if (extra > 0) sh.getRange(1, def.cols.length + 1, Math.max(last, rows.length), extra).clearContent();
 }
 
 /* 鏡像用：四分頁、暫存與舊分頁的後綴；mirrorRows_ 把 Mac mini 的資料轉成各分頁欄位（純函式，node 測試直接驗） */
@@ -91,7 +94,7 @@ function mirrorRows_(d, fromPost, oldSig) {
   return {
     posts: d.posts.map(fromPost),
     // lineHash 不鏡像（Mac mini 是正本時試算表那一欄永遠空白；回退到 GAS 後下一次「打卡同步」會重新填）
-    staff: d.staff.map(function (s) { var o = Object.assign({}, s); o.active = s.active ? 'TRUE' : 'FALSE'; o.lineHash = ''; return o; }),
+    staff: d.staff.map(function (s) { var o = Object.assign({}, s); o.active = s.active ? 'TRUE' : 'FALSE'; o.lineHash = ''; o.act = ''; return o; }),   // 啟用碼也不鏡像（回退後請主管重新產生）
     reads: d.reads.map(function (r) { return { postId: r.postId, staffId: r.staffId, name: r.name, unit: r.unit, at: r.at, sigId: r.driveSigId || oldSig[r.postId + '|' + r.staffId] || '' }; }),
     log: d.log.map(function (e) { return { at: e.at, action: e.action, target: e.target || '', summary: e.summary || '' }; })
   };
@@ -193,7 +196,7 @@ function makeStore_(files) {
   function toStaff(r) {
     return { id: r.id, name: r.name, unit: r.unit, pinHash: r.pinHash, salt: r.salt, pinVer: Number(r.pinVer) || 0,
       fail: Number(r.fail) || 0, active: bool_(r.active), createdAt: r.createdAt, deletedAt: r.deletedAt, src: r.src || '', store: r.store || '',
-      lineHash: r.lineHash || '' };
+      lineHash: r.lineHash || '', act: r.act || '' };
   }
 
   return {

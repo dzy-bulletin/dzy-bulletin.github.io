@@ -101,7 +101,7 @@ const verifyTEST = { verify: (t) => { const m = /^TEST:(.+)$/.exec(t); return m 
   eq('lineLogin：驗證失敗→LINE_BAD', sv.call('lineLogin', { idToken: 'garbage' }).code, 'LINE_BAD');
   eq('lineLogin：沒帶 idToken→BAD_REQ', sv.call('lineLogin', {}).code, 'BAD_REQ');
   const one = sv.call('lineLogin', { idToken: 'TEST:U1' });
-  eq('lineLogin：剛好一人→與 login 同格式', [one.ok, Object.keys(one.data).sort(), one.data.me], [true, ['board', 'me', 'token'], { id: 'S-001', name: '測試一', unit: 'mala' }]);
+  eq('lineLogin：剛好一人→與 login 同格式', [one.ok, Object.keys(one.data).sort(), one.data.me], [true, ['board', 'me', 'needPin', 'token'], { id: 'S-001', name: '測試一', unit: 'mala' }]);
   eq('lineLogin：沒設密碼也能登入，憑證可以讀 board', sv.call('board', { token: one.data.token }).data.me.id, 'S-001');
   eq('lineLogin：不動 PIN／連錯次數', [by('S-001').pinHash, by('S-001').fail, by('S-001').pinVer], ['', 0, 0]);
   eq('lineLogin：不帶 lineHash 給前端', JSON.stringify(one.data).includes('lineHash') || JSON.stringify(one.data).includes(H1), false);
@@ -113,6 +113,16 @@ const verifyTEST = { verify: (t) => { const m = /^TEST:(.+)$/.exec(t); return m 
   // 重設密碼（pinVer+1）→ LINE 發的憑證也失效
   sv.call('staffResetPin', { atoken: at, staffId: 'S-004' });
   eq('lineLogin 憑證：重設密碼後失效', sv.call('board', { token: locked.data.token }).code, 'AUTH');
+  // 2026-10-14：設密碼要證明是本人——LINE 登入後帶憑證可以直接設（不用啟用碼）；只認憑證本人，帶別人的 staffId 也沒用
+  const l4 = sv.call('lineLogin', { idToken: 'TEST:U4' });
+  eq('重設後 LINE 登入：needPin=true', l4.data.needPin, true);
+  eq('沒憑證也沒碼：NEED_CODE', sv.call('setPin', { staffId: 'S-004', pin: '2580' }).code, 'NEED_CODE');
+  eq('假憑證：AUTH', sv.call('setPin', { token: 'S-004.' + by('S-004').pinVer + '.forged', pin: '2580' }).code, 'AUTH');
+  const p2 = by('S-002').pinHash;
+  eq('帶 S-004 的憑證＋S-002 的 staffId：設的是 S-004、S-002 不動', [sv.call('setPin', { token: l4.data.token, staffId: 'S-002', pin: '2580' }).data.me.id, by('S-002').pinHash === p2, !!by('S-004').pinHash], ['S-004', true, true]);
+  eq('設完 LINE 登入：needPin=false', sv.call('lineLogin', { idToken: 'TEST:U4' }).data.needPin, false);
+  eq('已有密碼：帶憑證也不能再設', sv.call('setPin', { token: sv.call('lineLogin', { idToken: 'TEST:U4' }).data.token, pin: '1357' }).code, 'HAS_PIN');
+  eq('操作紀錄記下 LINE 方式設定', JSON.stringify(st.d).includes('LINE 登入後設定'), true);
   // 多人：同一個 LINE 對到兩位
   by('S-003').lineHash = H1;
   const two = sv.call('lineLogin', { idToken: 'TEST:U1' });
@@ -204,7 +214,7 @@ const verifyTEST = { verify: (t) => { const m = /^TEST:(.+)$/.exec(t); return m 
   const s1 = fg.store().getStaff()[0];
   eq('GAS 舊同仁表（沒有 lineHash 欄）讀出 lineHash=""', [s1.id, s1.lineHash], ['S-001', '']);
   s1.lineHash = want; const st2 = fg.store(); st2.saveStaff(s1);
-  eq('GAS 寫入後加欄、補上表頭、lineHash 在第 13 欄、dzy 在第 14 欄（空白）', [sh.maxCols, sh.data[0][12], sh.data[1][12], sh.data[0][13], sh.data[1][13]], [14, 'LINE 綁定（雜湊）', want, '管理系統編號（dzy）', '']);
+  eq('GAS 寫入後加欄、補上表頭、lineHash 在第 13 欄、dzy 在第 14 欄、act 在第 15 欄（空白）', [sh.maxCols, sh.data[0][12], sh.data[1][12], sh.data[0][13], sh.data[1][13], sh.data[0][14], sh.data[1][14] || ''], [15, 'LINE 綁定（雜湊）', want, '管理系統編號（dzy）', '', '啟用碼（雜湊，2026-10-14）', '']);
   fg.bumpGen();
   eq('GAS 讀回 lineHash', fg.store().getStaff()[0].lineHash, want);
   const mr = vm.runInContext('mirrorRows_', G)({ posts: [], staff: [{ id: 'S-001', name: '測試一', active: true, lineHash: want }], reads: [], log: [] }, (p) => p, {});
@@ -329,6 +339,13 @@ function bridgeWith(clockData, failClock) {
   const codes = [];
   for (let k = 0; k < 16; k++) codes.push((await SV2.post('/', { action: 'lineLogin', idToken: 'TEST:U-s' + (1 + k % 2) })).ok ? 'ok' : 'BUSY');
   eq('伺服器 限流：沒帶 X-Forwarded-For 時 11 次以上照常（只到全體 15 才 BUSY）', [codes.slice(0, 15).every((c) => c === 'ok'), codes[15]], [true, 'BUSY']);
+  // login／setPin 每 IP 限流（2026-10-14 審查 #1）：只按來源 IP，別的 IP、不帶標頭（沒有全體上限）不受影響
+  const SV3 = await startSrv({ PIN_PER_MIN: '3', PIN_PER_HOUR: '5' });
+  const pc = [];
+  for (let k = 0; k < 4; k++) pc.push((await SV3.post('/', k % 2 ? { action: 'setPin', staffId: 'S-001', pin: '2580' } : { action: 'login', staffId: 'S-002', pin: '1111' }, IA)).code);
+  eq('伺服器 PIN 限流：同 IP 第 4 次 login／setPin → BUSY', pc, ['BAD_PIN', 'NEED_CODE', 'BAD_PIN', 'BUSY']);
+  eq('伺服器 PIN 限流：別的 IP 照常、不帶標頭照常', [(await SV3.post('/', { action: 'setPin', staffId: 'S-001', pin: '2580' }, IB)).code, (await SV3.post('/', { action: 'setPin', staffId: 'S-001', pin: '2580' })).code], ['NEED_CODE', 'NEED_CODE']);
+  eq('伺服器 PIN 限流：LINE 登入不受影響', (await SV3.post('/', { action: 'lineLogin', idToken: 'TEST:U-s1' }, IA)).ok, true);
   const out = SV.out() + SV2.out();
   eq('伺服器 roster 不含 lineHash', JSON.stringify((await post('/', { action: 'roster' })).data).includes('lineHash'), false);
   eq('伺服器 紀錄不含 idToken／sub', /TEST:U-s1|U-s1/.test(out), false);

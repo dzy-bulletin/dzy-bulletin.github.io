@@ -75,7 +75,7 @@ async function main() {
   const today = FG.G.DZYB.today();
   const posts = ['公告一', '公告二', '公告三'].map((t, i) => doPost({ action: 'savePost', atoken, post: { title: t, body: '內容' + i, units: ['mala'], publishOn: today } }).data.post.id);
   const staff = Array.from({ length: 15 }, (_, i) => doPost({ action: 'staffAdd', atoken, name: '同仁' + i, unit: 'mala' }).data.staff.id);
-  const tokens = staff.map((id) => doPost({ action: 'setPin', staffId: id, pin: '2580' }).data.token);
+  const tokens = staff.map((id) => doPost({ action: 'setPin', staffId: id, pin: '2580', code: doPost({ action: 'staffIssueCode', atoken, staffId: id }).data.code }).data.token);
   let acks = 0;
   posts.forEach((p) => tokens.forEach((t, i) => { if (doPost({ action: 'ack', token: t, postId: p, sig: p === posts[2] ? JPG(p + i) : PNG(p + i) }).ok) acks++; }));   // 第三則的 15 張用 JPEG（兩種格式都要測到）
   doPost({ action: 'staffAdd', atoken, name: '還沒設密碼', unit: 'cf' });

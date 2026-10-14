@@ -26,12 +26,15 @@ var DZYB_MOCK = (function () {
   var auth = G.makeAuth_(fakeCrypto, L);
 
   // 資料帶入測試：測試以 add_init_script 注入 window.__E2E_DATA（每次隨機產生），有就用它，不用下方示範資料
+  var DEMO_CODE = '246810';   // 示範資料測試員的啟用碼（js/demo-data.js 同值）
+  function actFor(code) { var s = 'e2e-act'; return '4102444800000.' + s + '.' + auth.hashPin(s, code) + '.0'; }   // 到期 2100 年（測試資料）
   function seedFromE2E(d) {
     var staff = d.staff.map(function (x) {
       var salt = x.pin ? 'e2e-' + x.id : '';
       return { id: x.id, name: x.name, unit: x.unit, salt: salt, pinHash: x.pin ? auth.hashPin(salt, x.pin) : '',
         pinVer: 1, fail: x.fail || 0, active: true, createdAt: '2026-01-01T00:00:00.000Z', deletedAt: '', src: x.src || '', store: x.store || '',
-        lineHash: x.lineUid ? auth.lineHash(x.lineUid) : '' };   // 帶入資料的 lineUid＝模擬打卡系統已綁定的 LINE userId
+        lineHash: x.lineUid ? auth.lineHash(x.lineUid) : '',   // 帶入資料的 lineUid＝模擬打卡系統已綁定的 LINE userId
+        act: x.code ? actFor(x.code) : '' };                  // 帶入資料的 code＝主管已產生、還沒用的啟用碼（明碼，這裡雜湊）
     });
     var posts = d.posts.map(function (p) {
       return { id: p.id, title: p.title, body: p.body || '', units: p.units, publishOn: p.publishOn, expiresOn: p.expiresOn || '',
@@ -114,7 +117,7 @@ var DZYB_MOCK = (function () {
     reset: function () { db = seed(); save(); },
     testerReset: function () {                       // 預覽用：清掉測試員的密碼與簽名
       var d = load();
-      d.staff.forEach(function (s) { if (s.name.indexOf('測試員') === 0) { s.pinHash = ''; s.salt = ''; s.pinVer++; s.fail = 0; } });
+      d.staff.forEach(function (s) { if (s.name.indexOf('測試員') === 0) { s.pinHash = ''; s.salt = ''; s.pinVer++; s.fail = 0; s.act = actFor(DEMO_CODE); } });
       var ids = d.staff.filter(function (s) { return s.name.indexOf('測試員') === 0; }).map(function (s) { return s.id; });
       d.reads = d.reads.filter(function (r) { return ids.indexOf(r.staffId) < 0; });
       save();

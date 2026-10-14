@@ -179,8 +179,10 @@ const srv = http.createServer((req, res) => {
 
   // ===== 驗收 2：PRIMARY=mini 時 ack 回 MOVED、board 照常；PRIMARY=gas 時照舊 =====
   props.PRIMARY = 'gas';
-  let r = doPost({ action: 'setPin', staffId: 'S-001', pin: '2580' });
+  const code0 = doPost({ action: 'staffIssueCode', atoken: vm.runInContext('makeAuth_(gasCrypto_(), DZYB)', G).makeAdminToken(props.TOKEN_SECRET, props.ADMIN_VER, Date.now() + 3600e3), staffId: 'S-001' }).data.code;
+  let r = doPost({ action: 'setPin', staffId: 'S-001', pin: '2580', code: code0 });
   eq('PRIMARY=gas：setPin 照常', r.ok, true);
+  { const lg = book.getSheetByName('操作紀錄'); if (lg) lg.data.splice(1); }   // 產生啟用碼／設定密碼的紀錄與後面 export 的驗收無關，清掉（世代不變，紀錄不走快取）
   const tok = r.data.token;
   eq('PRIMARY=gas：board 照常', doPost({ action: 'board', token: tok }).ok, true);
   props.PRIMARY = 'mini';

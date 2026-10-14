@@ -60,6 +60,7 @@ def make(seed, today):
     firsts = {u: next(x['id'] for x in staff if x['unit'] == u) for u in STAFF_UNITS}   # 每個單位第一位保證有密碼（登入流程要用）
     for s in rng.sample([x for x in staff if x['id'] not in firsts.values()], max(1, len(staff) // 5)):
         s['pin'] = None
+        s['code'] = '%06d' % rng.randint(0, 999999)   # 主管已產生、還沒用的啟用碼（2026-10-14 起第一次設密碼要有碼）
     lockable = [s for s in staff if s['pin'] and s['unit'] in UNITS and s['id'] not in firsts.values()] or [s for s in staff if s['pin'] and s['unit'] in UNITS]
     rng.choice(lockable)['fail'] = 3
 

@@ -30,6 +30,9 @@ var DZYB = (function () {
   var MAX_FILES = 5;
   var MAX_BYTES = 20 * 1024 * 1024;
   var STAFF_MAX_FAIL = 3;           // C14
+  // 啟用碼（2026-10-14）：第一次設密碼／重設後要主管給的一次性 6 位數碼（或從打卡綁定的 LINE 進來）；7 天失效、輸錯 3 次作廢
+  var CODE_TTL_MS = 7 * 24 * 3600e3;
+  var CODE_MAX_FAIL = 3;
   var ADMIN_MAX_FAIL = 5;
   var ADMIN_LOCK_MS = 15 * 60 * 1000;
   var SIG_MAX_CHARS = 45000;
@@ -255,7 +258,7 @@ var DZYB = (function () {
     STAFF_UNITS: STAFF_UNITS, STAFF_UNIT_IDS: STAFF_UNIT_IDS, STAFF_UNIT_NAME: STAFF_UNIT_NAME, STORES: STORES,
     viewTabs: viewTabs, canSee: canSee, mustSign: mustSign, homeTab: homeTab,
     MAX_FILES: MAX_FILES, MAX_BYTES: MAX_BYTES, SIG_MAX_CHARS: SIG_MAX_CHARS, BODY_MAX: BODY_MAX,
-    STAFF_MAX_FAIL: STAFF_MAX_FAIL, ADMIN_MAX_FAIL: ADMIN_MAX_FAIL, ADMIN_LOCK_MS: ADMIN_LOCK_MS,
+    STAFF_MAX_FAIL: STAFF_MAX_FAIL, CODE_TTL_MS: CODE_TTL_MS, CODE_MAX_FAIL: CODE_MAX_FAIL, ADMIN_MAX_FAIL: ADMIN_MAX_FAIL, ADMIN_LOCK_MS: ADMIN_LOCK_MS,
     today: today, isDate: isDate, addDays: addDays, normUnits: normUnits, isAllUnits: isAllUnits,
     status: status, sortBoard: sortBoard, sortHistory: sortHistory,
     maskName: maskName, pinProblem: pinProblem, LINE_HASH_PREFIX: LINE_HASH_PREFIX, lineHashUpdates: lineHashUpdates, resolveClockRows: resolveClockRows,

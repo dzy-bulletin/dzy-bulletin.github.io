@@ -51,7 +51,9 @@ props.SPREADSHEET_ID = 'fake';
 ['公告', '同仁', '已讀', '操作紀錄'].forEach(n => { sheets[n] = makeSheet(3); });
 const snapSheet = makeSheet(3); let snapFail = false;
 snapSheet.getRange0 = snapSheet.getRange;
-snapSheet.getRange = (r, c, nr = 1, nc = 1) => { const g = snapSheet.getRange0(r, c, nr, nc); g.clearContent = () => { for (let i = r - 1; i < r - 1 + nr; i++) snapSheet.data[i] = []; snapSheet.data = snapSheet.data.filter(x => x && x.length); return g; }; return g; };
+// clearContent 只清指定的格（跟真的 Sheets 一樣），整列都空了才拿掉
+snapSheet.getRange = (r, c, nr = 1, nc = 1) => { const g = snapSheet.getRange0(r, c, nr, nc); g.clearContent = () => { for (let i = r - 1; i < r - 1 + nr; i++) { const row = snapSheet.data[i]; if (!row) continue; for (let j = c - 1; j < c - 1 + nc; j++) if (j < row.length) row[j] = ''; while (row.length && row[row.length - 1] === '') row.pop(); } snapSheet.data = snapSheet.data.filter(x => x && x.length); return g; }; return g; };
+snapSheet.getLastColumn = () => Math.max(0, ...snapSheet.data.map(x => (x || []).length));
 const snapBook = { getId: () => 'SNAP', getSheets: () => [{ setName: () => {} }], getSheetByName: n => n === '名單快照' ? snapSheet : null, insertSheet: () => snapSheet };
 // 同仁表：表頭＋1 人（最大 3 列）
 const staffHead = G.SHEETS_.staff.head;
@@ -109,8 +111,13 @@ eq('請求結束前不寫快照（批次同步只寫一次）', snapSheet.data.l
 Z.endRequest();
 const snap = snapSheet.data;
 eq('快照寫在獨立的公開名單試算表（主試算表沒有名單快照分頁）', [props.SNAP_SS_ID, sheets['名單快照']], ['SNAP', undefined]);
-eq('快照表頭', snap[0], ['id', 'name', 'unit', 'store', 'hasPin', 'locked']);
-eq('快照含新同仁（遮罩、門市、有密碼）', snap.find(r => r[0] === 'S-006'), ['S-006', '歐OO娜', 'mzt', '金山', 'Y', '']);
+eq('快照表頭（不含 hasPin）', snap[0], ['id', 'name', 'unit', 'store', 'locked']);
+eq('快照含新同仁（遮罩、門市；不含有沒有密碼）', snap.find(r => r[0] === 'S-006'), ['S-006', '歐OO娜', 'mzt', '金山', '']);
+// 舊版快照多一欄 hasPin：改版後第一次重寫要把第 6 欄清掉
+snapSheet.data.forEach(r => { if (r && r.length === 5) r.push('Y'); });
+const Z2 = vm.runInContext('makeStore_', G)(files);
+Z2.saveStaff(Object.assign({ id: 'S-006' }, S, { name: '歐陽娜娜', unit: 'mzt', store: '金山', pinHash: 'HASH', salt: 'SALT' })); Z2.endRequest();
+eq('舊快照的第 6 欄（hasPin）被清掉', snapSheet.data.every(r => r.length <= 5), true);
 eq('快照不含雜湊或 salt', JSON.stringify(snap).includes('HASH') || JSON.stringify(snap).includes('SALT'), false);
 eq('快照筆數＝在職同仁', snap.length - 1, vm.runInContext('makeStore_', G)(files).getStaff().filter(s => s.active).length);
 snapFail = true;

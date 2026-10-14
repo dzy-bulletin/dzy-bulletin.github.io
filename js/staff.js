@@ -2,7 +2,8 @@
 'use strict';
 var Staff = (function () {
   var L = DZYB, $ = UI.$, esc = UI.esc;
-  var FORGOT = '請主管到「設定 → 同仁名單」按「重設密碼」，你下次選名字時就能設定新密碼。';
+  var FORGOT = '請主管到「設定 → 同仁名單」按「重設密碼」，主管會拿到一組啟用碼給你，用它設定新密碼。';
+  var FIRST = '有用 LINE 打卡的人：從 LINE「鼎兆元打卡」選單點「佈告欄」就能直接進來，不用密碼。<br>沒有用 LINE 打卡的人：請主管到「設定 → 同仁名單」幫你產生啟用碼，輸入啟用碼後設定自己的密碼。';
   var v = { tab: 'board', unit: null, month: null, board: null, hist: null, loading: false, refreshing: false, error: null };
 
   function me() { try { return JSON.parse(UI.store.get('me')); } catch (e) { return null; } }
@@ -23,7 +24,7 @@ var Staff = (function () {
     var flash = UI.store.get('flash'); if (flash) UI.store.del('flash');
     if (loggedIn()) { loadBoard(); if (flash) UI.toast(flash); } else picker(true, undefined, flash);
   }
-  function clearMe() { UI.store.del('token'); UI.store.del('me'); UI.store.del('board'); renderMe(); $('app').innerHTML = ''; }   // 名單快取（roster）保留：換人時秒開
+  function clearMe() { UI.store.del('token'); UI.store.del('me'); UI.store.del('board'); UI.store.del('needPin'); renderMe(); $('app').innerHTML = ''; }   // 名單快取（roster）保留：換人時秒開
   function logout(msg) {
     var m = me(), g = m ? (m.unit.indexOf('hq-') === 0 ? 'hq' : m.unit) : undefined;   // 登出後名單停在原本的分組
     clearMe(); v.board = v.hist = null; if (msg) UI.toast(msg); picker(true, g);
@@ -36,9 +37,10 @@ var Staff = (function () {
   function renderMe() {
     var m = me(), bar = $('meBar');
     if (!m || !UI.store.get('token')) { bar.innerHTML = ''; return; }
-    bar.innerHTML = '👤 <span id="meName"></span> <button id="chgMe">不是我</button>';
+    bar.innerHTML = '👤 <span id="meName"></span> ' + (UI.store.get('needPin') ? '<button id="setPinBtn">設定密碼</button> ' : '') + '<button id="chgMe">不是我</button>';
     $('meName').textContent = m.name + '（' + L.STAFF_UNIT_NAME[m.unit] + '）';
     $('chgMe').onclick = function () { logout(); };
+    if ($('setPinBtn')) $('setPinBtn').onclick = setPinForm;
   }
 
   /* ---------- 選名字與密碼 ---------- */
@@ -67,8 +69,8 @@ var Staff = (function () {
     if (!lines.length) return null;
     var cell = function (l) { return l.split(',').map(function (c) { return c.replace(/^"|"$/g, ''); }); };
     var h = cell(lines[0]);
-    if (h.join(',') !== 'id,name,unit,store,hasPin,locked') return null;
-    return lines.slice(1).map(cell).map(function (c) { return { id: c[0], name: c[1], unit: c[2], store: c[3], hasPin: c[4] === 'Y', locked: c[5] === 'Y' }; });
+    if (h.join(',') !== 'id,name,unit,store,locked') return null;   // 2026-10-14 起名單不含 hasPin（外人看不出誰沒設密碼）
+    return lines.slice(1).map(cell).map(function (c) { return { id: c[0], name: c[1], unit: c[2], store: c[3], locked: c[4] === 'Y' }; });
   }
   function fetchCsvRoster() {
     if (!CFG.ROSTER_CSV || CFG.MODE !== 'cloud') return Promise.resolve(null);
@@ -150,33 +152,43 @@ var Staff = (function () {
 
   function pinInput(id, ph) { return '<input class="inp pinbox" id="' + id + '" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" placeholder="' + ph + '">'; }
 
+  function codeInput() { return '<input class="inp pinbox" id="ac" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code" placeholder="6 位數啟用碼">'; }
+
+  // 名單不再告訴前端誰沒設密碼（2026-10-14）：預設顯示輸入密碼；後端回「尚未設定密碼」或本人點「第一次使用」才換成啟用畫面。
+  // 設密碼要證明是本人：從 LINE「鼎兆元打卡」選單進來（不用碼），或輸入主管給的一次性啟用碼
   function pinForm(p, back) {
-    var title = p.locked ? '已鎖定' : p.hasPin ? '輸入密碼' : '設定個人密碼';
+    var first = p.hasPin === false;
+    var title = p.locked ? '已鎖定' : first ? '第一次使用' : '輸入密碼';
     var body;
     if (p.locked) body = '<div class="content" style="margin-top:0">密碼錯誤太多次，已鎖定。' + FORGOT + '</div><button class="btn ghost" id="pfBack2">我知道了</button>';
-    else if (p.hasPin) body = '<div class="hint" style="margin:0 0 10px" id="pfWho"></div>' + pinInput('pv', '請輸入 4 位數密碼') +
+    else if (!first) body = '<div class="hint" style="margin:0 0 10px" id="pfWho"></div>' + pinInput('pv', '請輸入 4 位數密碼') +
       '<div class="err" id="pfErr"></div><div style="height:12px"></div><button class="btn primary" id="pfGo">進入</button>' +
-      '<div style="height:10px"></div><button class="btn ghost" id="pfForgot">忘記密碼？</button>';
-    else body = '<div class="hint" style="margin:0 0 10px" id="pfWho"></div><label class="f">輸入 4 位數密碼</label>' + pinInput('p1', '••••') +
-      '<label class="f">再輸入一次</label>' + pinInput('p2', '••••') + '<div class="err" id="pfErr"></div><div style="height:12px"></div><button class="btn primary" id="pfGo">設定並進入</button>';
+      '<div style="height:10px"></div><button class="btn ghost" id="pfForgot">忘記密碼？</button>' +
+      '<div style="height:8px"></div><button class="btn ghost" id="pfFirst">第一次使用／主管給了啟用碼</button>';
+    else body = '<div class="hint" style="margin:0 0 10px" id="pfWho"></div><div class="content" style="margin:0 0 12px">' + FIRST + '</div>' +
+      '<label class="f">主管給的啟用碼</label>' + codeInput() +
+      '<label class="f">設定 4 位數密碼</label>' + pinInput('p1', '••••') +
+      '<label class="f">再輸入一次</label>' + pinInput('p2', '••••') + '<div class="err" id="pfErr"></div><div style="height:12px"></div><button class="btn primary" id="pfGo">設定並進入</button>' +
+      '<div style="height:10px"></div><button class="btn ghost" id="pfHave">我已經有密碼</button>';
     var s = UI.sheet('<div class="bar"><b>' + title + '</b><button id="pfBack">返回</button></div><div class="body">' + body + '</div>', true);
     s.querySelector('#pfBack').onclick = back;
     if (p.locked) { s.querySelector('#pfBack2').onclick = back; return; }
-    s.querySelector('#pfWho').textContent = p.name + '（' + L.STAFF_UNIT_NAME[p.unit] + '）' + (p.hasPin ? '' : '你好，第一次使用請設定 4 位數密碼，之後換手機時要輸入。');
+    s.querySelector('#pfWho').textContent = p.name + '（' + L.STAFF_UNIT_NAME[p.unit] + '）';
     var err = s.querySelector('#pfErr'), go = s.querySelector('#pfGo');
-    if (p.hasPin) {
+    if (!first) {
       s.querySelector('#pfForgot').onclick = function () {
         var f = UI.sheet('<div class="bar"><b>忘記密碼</b><button id="fgBack">返回</button></div><div class="body"><div class="content" style="margin-top:0">' + FORGOT + '</div><button class="btn ghost" id="fgOk">我知道了</button></div>', true);
         f.querySelector('#fgBack').onclick = function () { pinForm(p, back); };
         f.querySelector('#fgOk').onclick = back;
       };
+      s.querySelector('#pfFirst').onclick = function () { p.hasPin = false; pinForm(p, back); };
       var submit = function () {
         var done = UI.busy(go, '驗證中…');
         API.call('login', { staffId: p.id, pin: s.querySelector('#pv').value }).then(function (r) {
           done();
           if (r.ok) return enter(r.data);
           if (r.code === 'LOCKED') { p.locked = true; patchRoster(p.id, { locked: true }); return pinForm(p, back); }
-          if (r.code === 'BAD_REQ' && /尚未設定密碼/.test(r.message)) { p.hasPin = false; return pinForm(p, back); }   // 名單快照可能還沒更新
+          if (r.code === 'NO_PIN' || (r.code === 'BAD_REQ' && /尚未設定密碼/.test(r.message))) { p.hasPin = false; return pinForm(p, back); }   // BAD_REQ：0.7.5 以前的後端
           err.textContent = r.message; s.querySelector('#pv').value = '';
         });
       };
@@ -184,27 +196,58 @@ var Staff = (function () {
       s.querySelector('#pv').onkeydown = function (e) { if (e.key === 'Enter') submit(); };
       setTimeout(function () { var el = s.querySelector('#pv'); if (el) el.focus(); }, 50);
     } else {
+      s.querySelector('#pfHave').onclick = function () { p.hasPin = true; pinForm(p, back); };
       go.onclick = function () {
-        var a = s.querySelector('#p1').value, b = s.querySelector('#p2').value;
+        var c = s.querySelector('#ac').value.trim(), a = s.querySelector('#p1').value, b = s.querySelector('#p2').value;
+        if (!/^\d{6}$/.test(c)) { err.textContent = '請輸入主管給的 6 位數啟用碼'; return; }
         var bad = L.pinProblem(a);
-        if (bad === 'BAD_REQ') { err.textContent = '請輸入 4 位數字'; return; }
+        if (bad === 'BAD_REQ') { err.textContent = '密碼請輸入 4 位數字'; return; }
         if (bad === 'WEAK_PIN') { err.textContent = '太好猜了（如 1111、1234），請換一組'; return; }
         if (a !== b) { err.textContent = '兩次輸入不一樣'; return; }
         var done = UI.busy(go, '設定中…');
-        API.call('setPin', { staffId: p.id, pin: a }).then(function (r) {
+        API.call('setPin', { staffId: p.id, pin: a, code: c }).then(function (r) {
           done();
           if (r.ok) return enter(r.data);
           if (r.code === 'HAS_PIN') { p.hasPin = true; return pinForm(p, back); }
           err.textContent = r.message;
+          if (r.code === 'BAD_CODE') s.querySelector('#ac').value = '';
         });
       };
-      setTimeout(function () { var el = s.querySelector('#p1'); if (el) el.focus(); }, 50);
+      setTimeout(function () { var el = s.querySelector('#ac'); if (el) el.focus(); }, 50);
     }
+  }
+
+  // LINE 登入後還沒設密碼的人：選用。設了之後換手機、不從 LINE 進來也能登入（帶登入憑證，不用啟用碼）
+  function setPinForm() {
+    var s = UI.sheet('<div class="bar"><b>設定個人密碼</b><button id="spBack">返回</button></div><div class="body">' +
+      '<div class="content" style="margin:0 0 12px">你是用 LINE 自動登入的，可以不設密碼。設了之後，不從 LINE 進來也能選名字＋密碼登入。</div>' +
+      '<label class="f">輸入 4 位數密碼</label>' + pinInput('p1', '••••') + '<label class="f">再輸入一次</label>' + pinInput('p2', '••••') +
+      '<div class="err" id="pfErr"></div><div style="height:12px"></div><button class="btn primary" id="pfGo">設定</button></div>', true);
+    s.querySelector('#spBack').onclick = function () { UI.closeSheet(); };
+    var err = s.querySelector('#pfErr'), go = s.querySelector('#pfGo');
+    go.onclick = function () {
+      var a = s.querySelector('#p1').value, b = s.querySelector('#p2').value, bad = L.pinProblem(a);
+      if (bad === 'BAD_REQ') { err.textContent = '請輸入 4 位數字'; return; }
+      if (bad === 'WEAK_PIN') { err.textContent = '太好猜了（如 1111、1234），請換一組'; return; }
+      if (a !== b) { err.textContent = '兩次輸入不一樣'; return; }
+      var done = UI.busy(go, '設定中…');
+      API.call('setPin', { token: UI.store.get('token'), pin: a }).then(function (r) {
+        done();
+        if (r.ok || r.code === 'HAS_PIN') {
+          UI.store.del('needPin');
+          if (r.ok) { saveLogin(r.data); patchRoster(r.data.me.id, { hasPin: true, locked: false }); }
+          UI.closeSheet(); renderMe(); UI.toast(r.ok ? '密碼設定好了' : '你已經設定過密碼'); return;
+        }
+        if (r.code === 'AUTH') return logout(r.message);
+        err.textContent = r.message;
+      });
+    };
   }
 
   // 登入成功後存進這支手機（密碼登入與 line.html 的 LINE 登入共用；LINE 登入不動名單快取的 hasPin／locked）
   function saveLogin(d) {
     UI.store.set('token', d.token); UI.store.set('me', JSON.stringify(d.me));
+    if (d.needPin) UI.store.set('needPin', '1'); else UI.store.del('needPin');
     if (d.board) UI.store.set('board', JSON.stringify({ id: d.me.id, b: d.board }));
   }
   function enter(d) {

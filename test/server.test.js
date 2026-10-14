@@ -71,8 +71,9 @@ const p95 = (xs) => { const a = xs.slice().sort((x, y) => x - y); return a[Math.
 const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms));
 async function login(s) {   // 以 demo 資料建一個同仁憑證＋主管憑證
   await request(s.port, 'POST', '/__seed', { demo: true });
-  const tok = (await api(s, 'setPin', { staffId: 'S-013', pin: '2580' })).json.data.token;
   const at = (await api(s, 'adminLogin', { pass: '1234' })).json.data.atoken;
+  const code = (await api(s, 'staffIssueCode', { atoken: at, staffId: 'S-013' })).json.data.code;
+  const tok = (await api(s, 'setPin', { staffId: 'S-013', pin: '2580', code })).json.data.token;
   return { tok, at };
 }
 const calls = async (s) => (await request(s.port, 'GET', '/__bridgeCalls')).json.data;

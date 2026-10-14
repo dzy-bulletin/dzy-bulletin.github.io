@@ -12,6 +12,7 @@
  *   BRIDGE_FAKE_DELAY_MS（E2E 假橋接每個動作延遲，阻塞測試用）；BRIDGE_FAKE_FAIL=1（E2E 假橋接一律失敗並回 AUTH，驗錯誤碼對應用）
  *   STAFF_SOURCE=clock|dzy（預設 clock＝打卡同步；dzy＝同仁名單改讀管理系統，需搬家腳本通過，見 server/staff-dzy.js 與 DEPLOY.md 附錄 D）；DZY_PLATFORM_URL／BULLETIN_SVC_KEY（只給 staff-dzy.js 與 mirror 用）
  *   LINE_CHANNEL_ID=2011292256（選用；LINE 自動登入驗 ID token 用的 LINE Login 頻道 ID，預設就是鼎兆元打卡那個）
+ *   PIN_PER_MIN=3（2026-10-14 Eason 指定）、PIN_PER_HOUR=60（選用；login／setPin 每個來源 IP 的上限，超過回 BUSY；沒有全體上限，免得外人把全部人擋在門外）
  *   LINE_LOGIN_PER_MIN=10、LINE_LOGIN_GLOBAL_PER_MIN=120（選用；lineLogin 真的要打 LINE verify 時才計數：每個來源 IP 每分鐘上限／全部加總每分鐘上限，超過回 BUSY）
  *
  * 不卡住事件迴圈（#6 審查發現 1）：Google 橋接一律 async，在 Service 之外 await。每個請求用自己的 files／clockSrc 墊片建 Service：
@@ -69,6 +70,8 @@ function config(env) {
     LINE_CHANNEL_ID: env.LINE_CHANNEL_ID || '2011292256',
     LINE_PER_MIN: Number(env.LINE_LOGIN_PER_MIN) > 0 ? Math.floor(Number(env.LINE_LOGIN_PER_MIN)) : 10,
     LINE_GLOBAL_PER_MIN: Number(env.LINE_LOGIN_GLOBAL_PER_MIN) > 0 ? Math.floor(Number(env.LINE_LOGIN_GLOBAL_PER_MIN)) : 120,
+    PIN_PER_MIN: Number(env.PIN_PER_MIN) > 0 ? Math.floor(Number(env.PIN_PER_MIN)) : 3,       // 密碼登入＋設密碼：每個來源 IP 每分鐘／每小時上限（2026-10-14 審查：防逐一列舉誰沒密碼、亂猜讓啟用碼作廢）
+    PIN_PER_HOUR: Number(env.PIN_PER_HOUR) > 0 ? Math.floor(Number(env.PIN_PER_HOUR)) : 60,
     STAFF_SOURCE: String(env.STAFF_SOURCE || 'clock').trim().toLowerCase() === 'dzy' ? 'dzy' : 'clock',   // 同仁名單來源（預設 clock＝打卡同步）；dzy 要搬家腳本通過才生效，見 server/staff-dzy.js
     LINE_VERIFY_URL: env.LINE_VERIFY_URL || 'https://api.line.me/oauth2/v2.1/verify'   // 只給測試指到本機假 LINE
   };
@@ -194,8 +197,18 @@ function makeApp(cfg) {
     if ((mine && mine.length >= cfg.LINE_PER_MIN) || lineAll.length >= cfg.LINE_GLOBAL_PER_MIN) return true;
     lineAll.push(now); if (mine) { mine.push(now); lineByIp.set(ip, mine); } return false;
   }
+  // 密碼登入／設密碼限流（只按來源 IP；沒有 X-Forwarded-For 就不限，見 #32-8）
+  const pinByIp = new Map();
+  function pinBusy(ip) {
+    if (!ip) return false;
+    const now = Date.now(), arr = (pinByIp.get(ip) || []).filter((t) => now - t < 3600e3);
+    if (pinByIp.size > 5000) for (const [k, v] of pinByIp) if (!v.length || now - v[v.length - 1] >= 3600e3) pinByIp.delete(k);
+    if (arr.length >= cfg.PIN_PER_HOUR || arr.filter((t) => now - t < 60e3).length >= cfg.PIN_PER_MIN) { pinByIp.set(ip, arr); return true; }
+    arr.push(now); pinByIp.set(ip, arr); return false;
+  }
   async function run(action, q, ip) {
     if ((WRITE.has(action) || action === 'uploadFile') && frozen()) return { out: MOVED, revoke: [] };
+    if ((action === 'login' || action === 'setPin') && pinBusy(ip)) return { out: { ok: false, code: 'BUSY', message: '嘗試太多次，請過幾分鐘再試' }, revoke: [] };
     const pre = { shared: new Set(), revoke: [], uploaded: null, clock: null, line: undefined, need: null, ip: ip || '' };
     for (let round = 0; round < 3; round++) {
       pre.need = null; pre.revoke = [];
@@ -315,7 +328,8 @@ function makeApp(cfg) {
       const salt = x.pin ? auth.newSalt() : '';
       return { id: x.id, name: x.name, unit: x.unit, salt, pinHash: x.pin ? auth.hashPin(salt, x.pin) : '', pinVer: 1, fail: x.fail || 0,
         active: true, createdAt: '2026-01-01T00:00:00.000Z', deletedAt: '', src: x.src || '', store: x.store || '',
-        lineHash: x.lineUid ? auth.lineHash(x.lineUid) : '' };
+        lineHash: x.lineUid ? auth.lineHash(x.lineUid) : '',
+        act: x.code ? (() => { const s2 = auth.newSalt(); return '4102444800000.' + s2 + '.' + auth.hashPin(s2, x.code) + '.0'; })() : '' };   // 帶入的 code＝還沒用的啟用碼
     });
     const posts = d.posts.map((p) => Object.assign({ body: '', expiresOn: '', pinned: false, published: true, offOn: '', files: [],
       createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' }, p));
