@@ -60,7 +60,7 @@ const fakeRedeem = { redeem: (t, aud) => {
   // dzyAdminLogin（2026-10-17 公告管理）
   st.getAdmin = () => ({ hash: 'x', salt: 's', ver: 3, fail: 4, lockUntil: 0, init: '' });
   const ad = sv.call('dzyAdminLogin', { ticket: TA('009') });
-  eq('dzyAdminLogin：管理券 → 管理憑證＋設定頁資料', [ad.ok, /^A\.3\./.test(ad.data.atoken), Array.isArray(ad.data.data.posts)], [true, true, true]);
+  eq('dzyAdminLogin：管理券 → 管理憑證＋設定頁資料', [ad.ok, /^D\.3\./.test(ad.data.atoken), Array.isArray(ad.data.data.posts)], [true, true, true]);
   const exp = Number(ad.data.atoken.split('.')[2]);
   eq('dzyAdminLogin：憑證效期 8 小時（不是 7 天）', Math.round((exp - Date.now()) / 3600e3), 8);
   eq('dzyAdminLogin：憑證可讀 adminData', sv.call('adminData', { atoken: ad.data.atoken }).ok, true);
@@ -72,6 +72,15 @@ const fakeRedeem = { redeem: (t, aud) => {
   eq('dzyAdminLogin：GAS 回退期 → DZY_OFF', off.call('dzyAdminLogin', { ticket: TA('001') }).code, 'DZY_OFF');
   eq('dzyAdminLogin：不動通行碼連錯次數（getAdmin 不被寫）', st.getAdmin().fail, 4);
   eq('dzyAdminLogin 在 WRITE_ACTIONS', sv.WRITE_ACTIONS.includes('dzyAdminLogin'), true);
+  // 審查 #44-1：管理系統換來的憑證（D）只能管公告
+  eq('dzyAdminLogin：憑證是 D 種', ad.data.atoken.slice(0, 2), 'D.');
+  const D = ad.data.atoken;
+  eq('D 憑證：同仁名單／打卡同步一律 FORBIDDEN', ['staffAdd', 'staffSetStore', 'syncClock', 'staffDelete', 'staffResetPin', 'staffIssueCode'].map((x) => sv.call(x, { atoken: D, staffId: 'S-001', name: 'x', unit: 'mala' }).code), ['FORBIDDEN', 'FORBIDDEN', 'FORBIDDEN', 'FORBIDDEN', 'FORBIDDEN', 'FORBIDDEN']);
+  eq('D 憑證：adminData 的同仁只有姓名單位（沒有密碼／鎖定／啟用碼狀態）', Object.keys(sv.call('adminData', { atoken: D }).data.staff[0]).sort(), ['id', 'name', 'store', 'unit']);
+  const fullTok = A.makeAdminToken('SECRET', 3, Date.now() + 3600e3);
+  eq('A 憑證（通行碼）：同仁名單照常、adminData 有密碼狀態', [sv.call('staffResetPin', { atoken: fullTok, staffId: 'S-001' }).code !== 'FORBIDDEN', 'hasPin' in sv.call('adminData', { atoken: fullTok }).data.staff[0]], [true, true]);
+  { const initSt = memStore([S0('S-001', '測試一', 'mala')]); initSt.getAdmin = () => ({ ver: 1, init: 'pending' });
+    eq('ADMIN_INIT 待生效 → dzyAdminLogin 說明原因（ADMIN_INIT）', makeService_(L, initSt, {}, A, clock, null, null, { dzyRedeem: fakeRedeem }).call('dzyAdminLogin', { ticket: TA('001') }).code, 'ADMIN_INIT'); }
 }
 
 (async () => {
@@ -126,7 +135,7 @@ const fakeRedeem = { redeem: (t, aud) => {
   const s1 = await post({ action: 'dzyLogin', ticket: T('001') }, IP);
   eq('伺服器 dzyLogin：對到 → 登入、憑證可讀 board', [s1.ok, s1.data && s1.data.me.id, (await post({ action: 'board', token: s1.data.token })).data.me.id], [true, 'S-001', 'S-001']);
   // 種子帶的通行碼是「待生效」（ADMIN_INIT）：要先用通行碼登入一次才生效；生效前所有管理憑證一律無效（含管理系統換來的）
-  eq('伺服器 dzyAdminLogin：通行碼更換待生效時 → AUTH', (await post({ action: 'dzyAdminLogin', ticket: TA('003') }, '203.0.113.20')).code, 'AUTH');
+  eq('伺服器 dzyAdminLogin：通行碼更換待生效時 → ADMIN_INIT', (await post({ action: 'dzyAdminLogin', ticket: TA('003') }, '203.0.113.20')).code, 'ADMIN_INIT');
   await post({ action: 'adminLogin', pass: 'adminpass88' }, '203.0.113.21');
   const ad = await post({ action: 'dzyAdminLogin', ticket: TA('003') }, '203.0.113.20');
   eq('伺服器 dzyAdminLogin：管理券 → 憑證可讀 adminData', [ad.ok, (await post({ action: 'adminData', atoken: ad.data.atoken })).ok], [true, true]);

@@ -25,6 +25,7 @@ var CFG = (function () {
   if (c.MODE === 'cloud' && !c.GAS_URL) c.MODE = 'local';   // 尚未部署後端前，一律走假資料
   // DEV＝本機開發／測試（假資料，或本機網址指定 ?api=）。2026-10-17 起「⚙ 設定」「不是我」「主管設定」「同仁名單」只在 DEV 顯示：
   // 正式網址一律看不到，公告管理改從管理系統「公告專區」進（Eason 指定）。本機假資料不碰真後端，留著給整套測試用
-  c.DEV = c.MODE === 'local' || !!c.API_OVERRIDE;
+  var localHost = /^(localhost|127\.0\.0\.1)$/.test(location.hostname);
+  c.DEV = (c.MODE === 'local' && localHost) || !!c.API_OVERRIDE;   // 正式網址加 ?mode=local 也不算 DEV（審查 #44-7）
   return c;
 })();

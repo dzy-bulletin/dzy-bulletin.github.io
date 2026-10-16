@@ -9,7 +9,8 @@ var Admin = (function () {
 
   /* ---------- 管理系統「公告管理／新增公告」分頁（2026-10-17）----------
    * ?embed=dzy&view=posts|new：整頁就是該分頁（沒有分頁切換、沒有關閉／登出），管理憑證只從管理系統的 bulletin-admin 入場券換來。
-   * 每次打開都先丟掉舊憑證、重新向管理系統確認權限：人資取消勾選後，下次打開就進不來（已開著的畫面最晚 8 小時失效）。 */
+   * 每次打開都重新向管理系統確認權限：人資取消勾選後，下次打開就進不來（已開著的畫面最晚 8 小時失效）。
+   * 換到新憑證才覆蓋舊的、換不到才刪：同時開兩個公告管理分頁不會互相登出、草稿不會丟（審查 #44-5）。 */
   function title() { return a.embed === 'posts' && a.tab === 'posts' ? '公告管理' : a.edit ? '編輯公告' : '新增公告'; }
   function denied(msg) {
     var s = UI.sheet('<div class="bar"><b>' + title() + '</b></div><div class="body"><div class="errbox"></div></div>', true);
@@ -18,12 +19,11 @@ var Admin = (function () {
   function openEmbedded(view) {
     a.embed = view; a.tab = view; a.edit = null; a.draft = null; a.files = []; a.data = null;
     document.body.classList.add('embed-admin');
-    UI.store.del('atoken');
     UI.sheet('<div class="bar"><b>' + title() + '</b></div><div class="body"><div class="loading">正在用管理系統帳號登入</div></div>', true);
     Staff.askTicket(function (t) {
-      if (!t) return denied('你沒有公告管理權限。請洽人資在管理系統「同仁名單」幫你勾選「可管理公告」。');
+      if (!t) { UI.store.del('atoken'); return denied('你沒有公告管理權限，或管理系統暫時連不上。沒有權限請洽人資在「同仁名單」幫你勾選「可管理公告」。'); }
       API.call('dzyAdminLogin', { ticket: t }).then(function (r) {
-        if (!r.ok || !r.data || !r.data.atoken) return denied(r.message || '登入失敗，請重新整理再試');
+        if (!r.ok || !r.data || !r.data.atoken) { if (r.code === 'DZY_BAD') UI.store.del('atoken'); return denied(r.message || '登入失敗，請重新整理再試'); }
         UI.store.set('atoken', r.data.atoken);
         if (UI.store.get('atoken') !== r.data.atoken) return denied('這個瀏覽器擋住了框框裡的登入資料，請改用一般瀏覽器（Chrome／Safari）開管理系統');
         a.data = r.data.data; render();

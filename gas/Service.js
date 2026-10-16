@@ -37,10 +37,13 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify, opts) 
     if (!auth.verifyStaffToken(store.secret(), req.token, s)) throw err('AUTH', '請重新選擇你的名字');
     return s;
   }
-  function requireAdmin(req) {
+  // full＝這個動作要通行碼等級（'A'）的憑證；管理系統換來的（'D'）只能管公告（審查 #44-1：同仁名單、打卡同步不給 'D'）
+  function requireAdmin(req, full) {
     var a = store.getAdmin();
     if (a.init) throw err('AUTH', '管理通行碼已更換，請重新登入');     // Eason 填了新 ADMIN_INIT：所有舊登入立即失效
-    if (!auth.verifyAdminToken(store.secret(), req.atoken, a.ver, clock.nowMs())) throw err('AUTH', '請重新輸入管理通行碼');
+    var kind = auth.verifyAdminToken(store.secret(), req.atoken, a.ver, clock.nowMs());
+    if (!kind) throw err('AUTH', '請重新輸入管理通行碼');
+    if (full && kind !== 'A') throw err('FORBIDDEN', '這個功能不能從管理系統使用');
     return a;
   }
   // 啟用碼（2026-10-14 補「外人可替沒設密碼的同仁搶設密碼」）：存在同仁的 act 欄＝'到期毫秒.salt.雜湊.輸錯次數'；
@@ -187,7 +190,9 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify, opts) 
       var got = dzyRedeem.redeem(t, 'bulletin-admin');
       if (!got || got.admin !== true) throw err('DZY_BAD', '管理系統登入驗證失敗，請重新整理再試');
       var a = store.getAdmin();
-      var atoken = auth.makeAdminToken(store.secret(), a.ver, clock.nowMs() + DZY_ADMIN_TOKEN_MS);
+      // 主管通行碼更換待生效（ADMIN_INIT）時所有管理憑證都無效，換了也用不了：直接說清楚（審查 #44-6；處理見 server/DEPLOY.md）
+      if (a.init) throw err('ADMIN_INIT', '主管通行碼更換還沒完成，暫時不能管理公告，請聯絡資訊部');
+      var atoken = auth.makeAdminToken(store.secret(), a.ver, clock.nowMs() + DZY_ADMIN_TOKEN_MS, 'D');
       var who = String(got.emp_no || got.uid || '').slice(0, 40), name = String(got.name || '').slice(0, 40);
       log('管理系統登入', who, name + '（公告專區）');
       return { atoken: atoken, data: H.adminData({ atoken: atoken }) };
@@ -251,6 +256,10 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify, opts) 
         return o;
       });
       var staff = store.getStaff().filter(function (s) { return s.active; }).map(adminRow);
+      // 管理系統換來的憑證（'D'）用不到同仁名單：只留姓名單位（已讀回條要用），不給有沒有密碼、鎖定、啟用碼期限（審查 #44-1）
+      if (auth.verifyAdminToken(store.secret(), q.atoken, store.getAdmin().ver, clock.nowMs()) === 'D') {
+        staff = staff.map(function (r) { return { id: r.id, name: r.name, unit: r.unit, store: r.store }; });
+      }
       mark();
       var quota = null;
       try { quota = files.quota(); } catch (e) { quota = null; }
@@ -336,7 +345,7 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify, opts) 
       return { post: withStatus(p, clock.today()) };
     },
     staffAdd: function (q) {
-      requireAdmin(q);
+      requireAdmin(q, true);
       var name = String(q.name || '').trim();
       if (!name || name.length > 20) throw err('BAD_REQ', '請填姓名（20 字內）');
       if (L.STAFF_UNIT_IDS.indexOf(q.unit) < 0) throw err('BAD_REQ', '單位錯誤');
@@ -350,7 +359,7 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify, opts) 
       return { staff: adminRow(s) };
     },
     staffSetStore: function (q) {
-      requireAdmin(q);
+      requireAdmin(q, true);
       var s = findStaff(q.staffId), stores = L.STORES[s.unit] || [], st = String(q.store || '');
       if (!stores.length || stores.indexOf(st) < 0) throw err('BAD_REQ', '門市錯誤');
       s.store = st; store.saveStaff(s); log('變更門市', s.id, s.name + '→' + st);
@@ -358,7 +367,7 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify, opts) 
     },
     // 從打卡系統同步：只新增在職且尚未在名單的人；打卡已離職者只列出，不自動刪除
     syncClock: function (q) {
-      requireAdmin(q);
+      requireAdmin(q, true);
       if (staffSource === 'dzy') throw err('BAD_REQ', '同仁名單已改由管理系統同步，不再使用打卡同步');
       if (!clockSrc) throw err('BAD_REQ', '未設定打卡系統來源');
       var got = clockSrc.read(), all = store.getStaff(), added = [], adopted = 0, moved = [], notes = [], relinked = [];
@@ -428,13 +437,13 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify, opts) 
       return { added: added, adopted: adopted, left: left, counts: got.counts, errors: (got.errors || []).concat(got.messages || [], dup, notes), moved: moved, relinked: relinked };
     },
     staffDelete: function (q) {
-      requireAdmin(q);
+      requireAdmin(q, true);
       var s = findStaff(q.staffId); s.active = false; s.deletedAt = iso(); store.saveStaff(s);
       log('刪除同仁', s.id, s.name); return {};
     },
     // 重設密碼＝清掉密碼＋同時產生啟用碼（碼只回這一次）；沒有碼就設不了新密碼，外人搶不走
     staffResetPin: function (q) {
-      requireAdmin(q);
+      requireAdmin(q, true);
       var s = findStaff(q.staffId);
       s.pinHash = ''; s.salt = ''; s.pinVer = (Number(s.pinVer) || 0) + 1; s.fail = 0;
       var c = issueCode(s); store.saveStaff(s);
@@ -442,7 +451,7 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify, opts) 
     },
     // 還沒設密碼的同仁（沒綁 LINE 打卡、或剛重設）：主管產生啟用碼；再按一次＝舊碼作廢、換新碼
     staffIssueCode: function (q) {
-      requireAdmin(q);
+      requireAdmin(q, true);
       var s = findStaff(q.staffId);
       if (s.pinHash) throw err('HAS_PIN', '這位同仁已經設定過密碼；忘記密碼請按「重設密碼」');
       var c = issueCode(s); store.saveStaff(s);
