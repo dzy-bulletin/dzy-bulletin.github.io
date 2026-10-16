@@ -271,6 +271,24 @@ async function fetchDirectory(cfg, opts) {
   return normalizeDirectory(j.data, { total: j.total, generated_at: j.generated_at });
 }
 
+// 管理系統「公告專區」入場券兌換（2026-10-16，平台 svcSsoRedeem）：回同仁編號 'DZY###'；券無效／過期／用過＝null；
+// 連不上、金鑰錯、設定缺 → 丟 business 錯誤 DZY_DOWN（前端退回選名字）。金鑰只放 POST 本文、只送本機
+async function redeemTicket(cfg, ticket, opts) {
+  const o = opts || {};
+  const down = (why) => { const e = new Error('管理系統暫時連不上，請選你的名字登入'); e.code = 'DZY_DOWN'; e.business = true; e.detail = why; return e; };
+  if (!cfg || !cfg.url || !cfg.key || !isLoopback(cfg.url)) throw down('未設定或非本機網址');
+  let j;
+  try {
+    const res = await (o.fetchImpl || fetch)(cfg.url, { method: 'POST', headers: { 'Content-Type': 'text/plain' },
+      body: JSON.stringify({ action: 'svcSsoRedeem', payload: { svc_key: cfg.key, ticket: String(ticket), aud: 'bulletin' } }), redirect: 'error', signal: AbortSignal.timeout(o.timeoutMs || 8000) });
+    if (res.status !== 200) throw new Error('HTTP ' + res.status);
+    j = await res.json();
+  } catch (e) { throw down(e && e.name === 'TimeoutError' ? '逾時' : String(e && e.message || e).replace(cfg.key, '***')); }
+  if (j && j.ok === true && j.data && /^DZY[0-9]{3}$/.test(String(j.data.emp_no || ''))) return String(j.data.emp_no);
+  if (j && j.ok === false && j.code === 'ticket_invalid') return null;
+  throw down('管理系統拒絕' + (j && j.code ? '（' + String(j.code).slice(0, 30) + '）' : ''));
+}
+
 // ================= DB 與紀錄（背景工作的做法：自己開一般連線，不經 makeSqliteStore） =================
 const readStaff = (db) => J.rows(db, 'SELECT json FROM staff ORDER BY rowid').map((r) => { const s = JSON.parse(r.json); if (typeof s.lineHash !== 'string') s.lineHash = ''; return s; });
 const kvGet = (db, k) => { const r = db.prepare('SELECT v FROM kv WHERE k = ?').get(k); return r ? r.v : null; };
@@ -518,5 +536,5 @@ async function main() {
 }
 if (require.main === module) main().catch((e) => { console.error('✗ ' + (e && e.message || e)); process.exit(1); });
 
-module.exports = { SWITCH_KEY, SNAP_KEY, roundProblem, runClaim, runRollback, clearCredentials, readRawClock, STORE_OF_SRC, SRC_OF_STORE, UNIT_OF_DZY, MIGRATED_KEY, DUAL_NEED_DAYS, normalizeDirectory, dzyApply, compareStaff, classifyMigration, massProblem, wantedLineHash,
+module.exports = { redeemTicket, SWITCH_KEY, SNAP_KEY, roundProblem, runClaim, runRollback, clearCredentials, readRawClock, STORE_OF_SRC, SRC_OF_STORE, UNIT_OF_DZY, MIGRATED_KEY, DUAL_NEED_DAYS, normalizeDirectory, dzyApply, compareStaff, classifyMigration, massProblem, wantedLineHash,
   clockKeyOfSrc, homeSrcOf, dirConfig, fetchDirectory, effectiveSource, sourceWarning, runDzySync, runMigrate, runDual, dualStatus, loadOverrides };

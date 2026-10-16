@@ -5,13 +5,15 @@
  * clock: { nowMs(), today() }
  * clockSrc（選用）: read() → { rows:[{src, unit, empId, name, active, lineHash}], errors:[字串], sources:[來源] }（打卡系統名單，唯讀；
  *   lineHash＝SHA-256('dzyb-line:' + LINE userId)，原始 userId 不離開 Apps Script）
- * opts（選用）: { staffSource: 'clock'|'dzy' }
+ * opts（選用）: { staffSource: 'clock'|'dzy', dzyRedeem: { redeem(ticket) → 同仁編號 'DZY###' 或 null } }
+ *   dzyRedeem＝管理系統「公告專區」入場券兌換（2026-10-16；Mac mini 用 async 墊片打本機平台 svcSsoRedeem、本機假資料認 'e2e0…###'；GAS 沒有＝DZY_OFF）
  * lineVerify（選用）: verify(idToken) → 驗證過的 LINE userId（sub）或 null（LINE ID token 驗證；Mac mini 用 async 墊片、GAS 用 UrlFetchApp、本機假資料認 'TEST:<uid>'） */
 'use strict';
 
 function makeService_(L, store, files, auth, clock, clockSrc, lineVerify, opts) {
   // opts.staffSource（選用）：'clock'（預設，今天行為）｜'dzy'（同仁名單改讀管理系統：沒有打卡同步，由 Mac mini 的 server/staff-dzy.js 同步）
   var staffSource = opts && opts.staffSource === 'dzy' ? 'dzy' : 'clock';
+  var dzyRedeem = opts && opts.dzyRedeem ? opts.dzyRedeem : null;
   var ADMIN_TOKEN_MS = 7 * 24 * 3600e3;   // 主管登入記住 7 天（2026-09-30 Eason 指定；原 12 小時）
   function err(code, message) { var e = new Error(message || code); e.code = code; return e; }
   function iso() { return new Date(clock.nowMs()).toISOString(); }
@@ -157,6 +159,20 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify, opts) 
       // 一律拒絕、不讓人選，退回選名字＋密碼。舊模式（clock）維持回 choices：同一人在佈告欄有兩筆（跨單位、判定前各同步一次）是既有的合法情境
       if (all.length > 1 && staffSource === 'dzy') throw err('LINE_AMBIGUOUS', 'LINE 登入對到不只一位同仁，請選你的名字登入');
       if (hits.length > 1) return { choices: hits.map(function (s) { return { id: s.id, name: L.maskName(s.name), unit: s.unit }; }) };
+      var s = hits[0];
+      return { token: auth.makeStaffToken(store.secret(), s.id, s.pinVer), me: me(s), board: boardFor(s), needPin: !s.pinHash };
+    },
+    // 管理系統自動登入（2026-10-16）：在管理系統「公告專區」打開佈告欄時，管理系統給一張一次性入場券（60 秒），
+    // 這裡拿券向管理系統兌換同仁編號（DZY###），對到 staff.dzy 恰好一位在職同仁才登入。跟 LINE 登入一樣不看也不動 PIN 與連錯次數。
+    dzyLogin: function (q) {
+      if (!dzyRedeem) throw err('DZY_OFF', '管理系統自動登入目前無法使用，請選你的名字登入');
+      var t = String(q.ticket || '');
+      if (!/^[0-9a-f]{64}$/.test(t)) throw err('BAD_REQ', '缺少管理系統登入資料');
+      var emp = dzyRedeem.redeem(t);
+      if (!emp || !/^DZY[0-9]{3}$/.test(String(emp))) throw err('DZY_BAD', '管理系統登入驗證失敗，請選你的名字登入');
+      var hits = store.getStaff().filter(function (s) { return s.active && !s.deletedAt && s.dzy && String(s.dzy).trim().toUpperCase() === emp; });
+      if (!hits.length) throw err('DZY_NOT_LINKED', '你的管理系統帳號還沒對到佈告欄名單，請選你的名字登入');
+      if (hits.length > 1) throw err('DZY_AMBIGUOUS', '管理系統帳號對到不只一位同仁，請選你的名字登入');
       var s = hits[0];
       return { token: auth.makeStaffToken(store.secret(), s.id, s.pinVer), me: me(s), board: boardFor(s), needPin: !s.pinHash };
     },
@@ -441,7 +457,7 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify, opts) 
       return { ok: false, code: 'SERVER', message: '系統忙碌，請稍後再試' };
     }
   }
-  return { call: call, WRITE_ACTIONS: ['setPin', 'login', 'ack', 'adminLogin', 'savePost', 'setPublished', 'setPinned', 'staffAdd', 'staffDelete', 'staffResetPin', 'staffIssueCode', 'syncClock', 'staffSetStore', 'lineLogin'] };   // uploadFile 不碰試算表，不上鎖
+  return { call: call, WRITE_ACTIONS: ['setPin', 'login', 'ack', 'adminLogin', 'savePost', 'setPublished', 'setPinned', 'staffAdd', 'staffDelete', 'staffResetPin', 'staffIssueCode', 'syncClock', 'staffSetStore', 'lineLogin', 'dzyLogin'] };   // uploadFile 不碰試算表，不上鎖
 }
 
 if (typeof module !== 'undefined') module.exports = { makeService_: makeService_ };

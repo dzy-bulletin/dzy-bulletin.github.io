@@ -22,7 +22,42 @@ var Staff = (function () {
     $('openAdmin').onclick = function () { Admin.open(); };
     // LINE 自動登入（line.html）失敗時留下的一次性提示：顯示一次就刪
     var flash = UI.store.get('flash'); if (flash) UI.store.del('flash');
-    if (loggedIn()) { loadBoard(); if (flash) UI.toast(flash); } else picker(true, undefined, flash);
+    // msg：管理系統自動登入沒成功的原因（沒對到名單、暫時連不上…），有就取代 flash 讓同仁知道為什麼要選名字（審查 #42-3）
+    function normal(msg) { var m = msg || flash; if (loggedIn()) { loadBoard(); if (m) UI.toast(m); } else picker(true, undefined, m); }
+    if (embedDzy()) { $('app').innerHTML = '<p style="padding:32px 16px;text-align:center;color:#6b6b6b">正在用管理系統帳號登入…</p>'; dzySso(normal); return; }
+    normal();
+  }
+
+  // 管理系統「公告專區」嵌入（2026-10-16）：網址帶 ?embed=dzy 且真的在框框裡 → 跟上層要一張一次性入場券換登入。
+  // 只理會 CFG.DZY_ORIGIN 的上層視窗送來的訊息；沒券（系統帳號）、券格式不對、8 秒沒回、換不到 → 照舊（已登入就看公告，沒登入就選名字）。
+  // 換到的人跟這支手機原本登入的人不同 → 改成管理系統那位（身分以管理系統為準）。
+  function embedDzy() {
+    try { return CFG.MODE === 'cloud' && window.parent !== window && new URLSearchParams(location.search).get('embed') === 'dzy'; } catch (e) { return false; }
+  }
+  function dzySso(fallback) {
+    var settled = false, timer = null;
+    function stop() { settled = true; window.removeEventListener('message', onMsg); clearTimeout(timer); }
+    function onMsg(e) {
+      if (settled || e.origin !== CFG.DZY_ORIGIN || e.source !== window.parent || !e.data || e.data.type !== 'dzy-sso') return;
+      stop();
+      var t = e.data.ticket;
+      if (typeof t !== 'string' || !/^[0-9a-f]{64}$/.test(t)) return fallback();   // 沒券＝系統帳號，不用解釋
+      API.call('dzyLogin', { ticket: t }).then(function (r) {
+        if (!r.ok || !r.data || !r.data.me) return fallback(r && r.code !== 'BAD_REQ' ? r.message : '');
+        var d = r.data, old = me();
+        if (old && old.id !== d.me.id) clearMe();
+        saveLogin(d);
+        // 瀏覽器擋第三方儲存時（例如 Chrome 封鎖第三方 Cookie）寫入會被吞掉：看起來登入了、下一個動作卻被登出（審查 #42-4）
+        if (UI.store.get('token') !== d.token) return fallback('這個瀏覽器擋住了框框裡的登入資料，請按上方「在新分頁開啟」');
+        v.unit = L.homeTab(d.me.unit); v.tab = 'board'; v.board = v.hist = null;
+        UI.toast('你好，' + d.me.name);
+        if (d.board) { v.board = d.board; cacheBoard(d.board); renderMe(); render(); } else loadBoard();
+      }).catch(function () { fallback(); });   // 任何例外都不能讓畫面卡在「正在登入…」（審查 #42-2）
+    }
+    window.addEventListener('message', onMsg);
+    // 管理系統換券通常一秒內；給 15 秒容忍 Mac mini 偶發慢（審查 #42-5）
+    timer = setTimeout(function () { if (!settled) { stop(); fallback(); } }, 15000);
+    try { window.parent.postMessage({ type: 'dzyb-sso-ready' }, CFG.DZY_ORIGIN); } catch (e) { stop(); fallback(); }
   }
   function clearMe() { UI.store.del('token'); UI.store.del('me'); UI.store.del('board'); UI.store.del('needPin'); renderMe(); $('app').innerHTML = ''; }   // 名單快取（roster）保留：換人時秒開
   function logout(msg) {
