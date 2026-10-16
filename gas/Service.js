@@ -5,7 +5,7 @@
  * clock: { nowMs(), today() }
  * clockSrc（選用）: read() → { rows:[{src, unit, empId, name, active, lineHash}], errors:[字串], sources:[來源] }（打卡系統名單，唯讀；
  *   lineHash＝SHA-256('dzyb-line:' + LINE userId)，原始 userId 不離開 Apps Script）
- * opts（選用）: { staffSource: 'clock'|'dzy', dzyRedeem: { redeem(ticket) → 同仁編號 'DZY###' 或 null } }
+ * opts（選用）: { staffSource: 'clock'|'dzy', dzyRedeem: { redeem(ticket, aud) → 平台兌換結果 {emp_no} ／ {admin:true, emp_no, uid, name}，券無效＝null } }
  *   dzyRedeem＝管理系統「公告專區」入場券兌換（2026-10-16；Mac mini 用 async 墊片打本機平台 svcSsoRedeem、本機假資料認 'e2e0…###'；GAS 沒有＝DZY_OFF）
  * lineVerify（選用）: verify(idToken) → 驗證過的 LINE userId（sub）或 null（LINE ID token 驗證；Mac mini 用 async 墊片、GAS 用 UrlFetchApp、本機假資料認 'TEST:<uid>'） */
 'use strict';
@@ -14,7 +14,8 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify, opts) 
   // opts.staffSource（選用）：'clock'（預設，今天行為）｜'dzy'（同仁名單改讀管理系統：沒有打卡同步，由 Mac mini 的 server/staff-dzy.js 同步）
   var staffSource = opts && opts.staffSource === 'dzy' ? 'dzy' : 'clock';
   var dzyRedeem = opts && opts.dzyRedeem ? opts.dzyRedeem : null;
-  var ADMIN_TOKEN_MS = 7 * 24 * 3600e3;   // 主管登入記住 7 天（2026-09-30 Eason 指定；原 12 小時）
+  var ADMIN_TOKEN_MS = 7 * 24 * 3600e3;
+  var DZY_ADMIN_TOKEN_MS = 8 * 3600e3;    // 管理系統公告專區換來的管理憑證：8 小時（2026-10-17）   // 主管登入記住 7 天（2026-09-30 Eason 指定；原 12 小時）
   function err(code, message) { var e = new Error(message || code); e.code = code; return e; }
   function iso() { return new Date(clock.nowMs()).toISOString(); }
   function log(action, target, summary) { store.addLog({ at: iso(), action: action, target: target || '', summary: summary || '' }); }
@@ -36,10 +37,13 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify, opts) 
     if (!auth.verifyStaffToken(store.secret(), req.token, s)) throw err('AUTH', '請重新選擇你的名字');
     return s;
   }
-  function requireAdmin(req) {
+  // full＝這個動作要通行碼等級（'A'）的憑證；管理系統換來的（'D'）只能管公告（審查 #44-1：同仁名單、打卡同步不給 'D'）
+  function requireAdmin(req, full) {
     var a = store.getAdmin();
     if (a.init) throw err('AUTH', '管理通行碼已更換，請重新登入');     // Eason 填了新 ADMIN_INIT：所有舊登入立即失效
-    if (!auth.verifyAdminToken(store.secret(), req.atoken, a.ver, clock.nowMs())) throw err('AUTH', '請重新輸入管理通行碼');
+    var kind = auth.verifyAdminToken(store.secret(), req.atoken, a.ver, clock.nowMs());
+    if (!kind) throw err('AUTH', '請重新輸入管理通行碼');
+    if (full && kind !== 'A') throw err('FORBIDDEN', '這個功能不能從管理系統使用');
     return a;
   }
   // 啟用碼（2026-10-14 補「外人可替沒設密碼的同仁搶設密碼」）：存在同仁的 act 欄＝'到期毫秒.salt.雜湊.輸錯次數'；
@@ -168,13 +172,30 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify, opts) 
       if (!dzyRedeem) throw err('DZY_OFF', '管理系統自動登入目前無法使用，請選你的名字登入');
       var t = String(q.ticket || '');
       if (!/^[0-9a-f]{64}$/.test(t)) throw err('BAD_REQ', '缺少管理系統登入資料');
-      var emp = dzyRedeem.redeem(t);
-      if (!emp || !/^DZY[0-9]{3}$/.test(String(emp))) throw err('DZY_BAD', '管理系統登入驗證失敗，請選你的名字登入');
+      var got = dzyRedeem.redeem(t, 'bulletin'), emp = got && typeof got.emp_no === 'string' ? got.emp_no : '';
+      if (!/^DZY[0-9]{3}$/.test(emp)) throw err('DZY_BAD', '管理系統登入驗證失敗，請選你的名字登入');
       var hits = store.getStaff().filter(function (s) { return s.active && !s.deletedAt && s.dzy && String(s.dzy).trim().toUpperCase() === emp; });
       if (!hits.length) throw err('DZY_NOT_LINKED', '你的管理系統帳號還沒對到佈告欄名單，請選你的名字登入');
       if (hits.length > 1) throw err('DZY_AMBIGUOUS', '管理系統帳號對到不只一位同仁，請選你的名字登入');
       var s = hits[0];
       return { token: auth.makeStaffToken(store.secret(), s.id, s.pinVer), me: me(s), board: boardFor(s), needPin: !s.pinHash };
+    },
+    // 管理系統「公告管理／新增公告」分頁（2026-10-17）：管理系統給有公告管理權限的人一張 bulletin-admin 入場券，
+    // 這裡兌換成功就簽發管理憑證（效期 8 小時，比通行碼登入的 7 天短：取消權限後最晚 8 小時失效），並在操作紀錄留下是誰。
+    // 不碰通行碼的連錯鎖定；通行碼登入本身不受影響（正式網址已不顯示入口）。
+    dzyAdminLogin: function (q) {
+      if (!dzyRedeem) throw err('DZY_OFF', '管理系統登入目前無法使用');
+      var t = String(q.ticket || '');
+      if (!/^[0-9a-f]{64}$/.test(t)) throw err('BAD_REQ', '缺少管理系統登入資料');
+      var got = dzyRedeem.redeem(t, 'bulletin-admin');
+      if (!got || got.admin !== true) throw err('DZY_BAD', '管理系統登入驗證失敗，請重新整理再試');
+      var a = store.getAdmin();
+      // 主管通行碼更換待生效（ADMIN_INIT）時所有管理憑證都無效，換了也用不了：直接說清楚（審查 #44-6；處理見 server/DEPLOY.md）
+      if (a.init) throw err('ADMIN_INIT', '主管通行碼更換還沒完成，暫時不能管理公告，請聯絡資訊部');
+      var atoken = auth.makeAdminToken(store.secret(), a.ver, clock.nowMs() + DZY_ADMIN_TOKEN_MS, 'D');
+      var who = String(got.emp_no || got.uid || '').slice(0, 40), name = String(got.name || '').slice(0, 40);
+      log('管理系統登入', who, name + '（公告專區）');
+      return { atoken: atoken, data: H.adminData({ atoken: atoken }) };
     },
     board: function (q) { return boardFor(staffOf(q)); },
     history: function (q) {
@@ -235,6 +256,10 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify, opts) 
         return o;
       });
       var staff = store.getStaff().filter(function (s) { return s.active; }).map(adminRow);
+      // 管理系統換來的憑證（'D'）用不到同仁名單：只留姓名單位（已讀回條要用），不給有沒有密碼、鎖定、啟用碼期限（審查 #44-1）
+      if (auth.verifyAdminToken(store.secret(), q.atoken, store.getAdmin().ver, clock.nowMs()) === 'D') {
+        staff = staff.map(function (r) { return { id: r.id, name: r.name, unit: r.unit, store: r.store }; });
+      }
       mark();
       var quota = null;
       try { quota = files.quota(); } catch (e) { quota = null; }
@@ -320,7 +345,7 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify, opts) 
       return { post: withStatus(p, clock.today()) };
     },
     staffAdd: function (q) {
-      requireAdmin(q);
+      requireAdmin(q, true);
       var name = String(q.name || '').trim();
       if (!name || name.length > 20) throw err('BAD_REQ', '請填姓名（20 字內）');
       if (L.STAFF_UNIT_IDS.indexOf(q.unit) < 0) throw err('BAD_REQ', '單位錯誤');
@@ -334,7 +359,7 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify, opts) 
       return { staff: adminRow(s) };
     },
     staffSetStore: function (q) {
-      requireAdmin(q);
+      requireAdmin(q, true);
       var s = findStaff(q.staffId), stores = L.STORES[s.unit] || [], st = String(q.store || '');
       if (!stores.length || stores.indexOf(st) < 0) throw err('BAD_REQ', '門市錯誤');
       s.store = st; store.saveStaff(s); log('變更門市', s.id, s.name + '→' + st);
@@ -342,7 +367,7 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify, opts) 
     },
     // 從打卡系統同步：只新增在職且尚未在名單的人；打卡已離職者只列出，不自動刪除
     syncClock: function (q) {
-      requireAdmin(q);
+      requireAdmin(q, true);
       if (staffSource === 'dzy') throw err('BAD_REQ', '同仁名單已改由管理系統同步，不再使用打卡同步');
       if (!clockSrc) throw err('BAD_REQ', '未設定打卡系統來源');
       var got = clockSrc.read(), all = store.getStaff(), added = [], adopted = 0, moved = [], notes = [], relinked = [];
@@ -412,13 +437,13 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify, opts) 
       return { added: added, adopted: adopted, left: left, counts: got.counts, errors: (got.errors || []).concat(got.messages || [], dup, notes), moved: moved, relinked: relinked };
     },
     staffDelete: function (q) {
-      requireAdmin(q);
+      requireAdmin(q, true);
       var s = findStaff(q.staffId); s.active = false; s.deletedAt = iso(); store.saveStaff(s);
       log('刪除同仁', s.id, s.name); return {};
     },
     // 重設密碼＝清掉密碼＋同時產生啟用碼（碼只回這一次）；沒有碼就設不了新密碼，外人搶不走
     staffResetPin: function (q) {
-      requireAdmin(q);
+      requireAdmin(q, true);
       var s = findStaff(q.staffId);
       s.pinHash = ''; s.salt = ''; s.pinVer = (Number(s.pinVer) || 0) + 1; s.fail = 0;
       var c = issueCode(s); store.saveStaff(s);
@@ -426,7 +451,7 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify, opts) 
     },
     // 還沒設密碼的同仁（沒綁 LINE 打卡、或剛重設）：主管產生啟用碼；再按一次＝舊碼作廢、換新碼
     staffIssueCode: function (q) {
-      requireAdmin(q);
+      requireAdmin(q, true);
       var s = findStaff(q.staffId);
       if (s.pinHash) throw err('HAS_PIN', '這位同仁已經設定過密碼；忘記密碼請按「重設密碼」');
       var c = issueCode(s); store.saveStaff(s);
@@ -457,7 +482,7 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify, opts) 
       return { ok: false, code: 'SERVER', message: '系統忙碌，請稍後再試' };
     }
   }
-  return { call: call, WRITE_ACTIONS: ['setPin', 'login', 'ack', 'adminLogin', 'savePost', 'setPublished', 'setPinned', 'staffAdd', 'staffDelete', 'staffResetPin', 'staffIssueCode', 'syncClock', 'staffSetStore', 'lineLogin', 'dzyLogin'] };   // uploadFile 不碰試算表，不上鎖
+  return { call: call, WRITE_ACTIONS: ['setPin', 'login', 'ack', 'adminLogin', 'savePost', 'setPublished', 'setPinned', 'staffAdd', 'staffDelete', 'staffResetPin', 'staffIssueCode', 'syncClock', 'staffSetStore', 'lineLogin', 'dzyLogin', 'dzyAdminLogin'] };   // uploadFile 不碰試算表，不上鎖
 }
 
 if (typeof module !== 'undefined') module.exports = { makeService_: makeService_ };

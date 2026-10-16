@@ -36,14 +36,18 @@ function makeAuth_(c, rules) {
   function staffIdOf(token) { return String(token || '').split('.')[0] || null; }
 
   // C7
-  function makeAdminToken(secret, ver, expMs) {
-    return 'A.' + ver + '.' + expMs + '.' + c.hmacB64url(secret, 'A|' + ver + '|' + expMs);
+  // 憑證種類（2026-10-17 審查 #44-1）：'A'＝管理通行碼登入（全部權限）；'D'＝管理系統公告專區換來的（只能管公告，不能動同仁名單）。
+  // 種類寫進簽章內容，改字首就驗不過
+  function makeAdminToken(secret, ver, expMs, kind) {
+    var k = kind === 'D' ? 'D' : 'A';
+    return k + '.' + ver + '.' + expMs + '.' + c.hmacB64url(secret, k + '|' + ver + '|' + expMs);
   }
+  // 回傳憑證種類（'A'／'D'），無效＝false
   function verifyAdminToken(secret, token, ver, nowMs) {
     var p = String(token || '').split('.');
-    if (p.length !== 4 || p[0] !== 'A') return false;
+    if (p.length !== 4 || (p[0] !== 'A' && p[0] !== 'D')) return false;
     if (String(p[1]) !== String(ver) || !(Number(p[2]) > nowMs)) return false;
-    return safeEq(p[3], c.hmacB64url(secret, 'A|' + p[1] + '|' + p[2]));
+    return safeEq(p[3], c.hmacB64url(secret, p[0] + '|' + p[1] + '|' + p[2])) ? p[0] : false;
   }
 
   // C14 同仁登入：回傳 {ok, code, left, fail}；fail 是要寫回的新連錯次數

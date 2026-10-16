@@ -271,20 +271,23 @@ async function fetchDirectory(cfg, opts) {
   return normalizeDirectory(j.data, { total: j.total, generated_at: j.generated_at });
 }
 
-// 管理系統「公告專區」入場券兌換（2026-10-16，平台 svcSsoRedeem）：回同仁編號 'DZY###'；券無效／過期／用過＝null；
+// 管理系統「公告專區」入場券兌換（2026-10-16，平台 svcSsoRedeem）：aud＝'bulletin'（預設）回 {emp_no:'DZY###'}；
+// aud＝'bulletin-admin'（2026-10-17 公告管理）回 {admin:true, emp_no, uid, name}；券無效／過期／用過＝null；
 // 連不上、金鑰錯、設定缺 → 丟 business 錯誤 DZY_DOWN（前端退回選名字）。金鑰只放 POST 本文、只送本機
-async function redeemTicket(cfg, ticket, opts) {
-  const o = opts || {};
+async function redeemTicket(cfg, ticket, aud, opts) {
+  const o = opts || {}, want = aud === 'bulletin-admin' ? 'bulletin-admin' : 'bulletin';
   const down = (why) => { const e = new Error('管理系統暫時連不上，請選你的名字登入'); e.code = 'DZY_DOWN'; e.business = true; e.detail = why; return e; };
   if (!cfg || !cfg.url || !cfg.key || !isLoopback(cfg.url)) throw down('未設定或非本機網址');
   let j;
   try {
     const res = await (o.fetchImpl || fetch)(cfg.url, { method: 'POST', headers: { 'Content-Type': 'text/plain' },
-      body: JSON.stringify({ action: 'svcSsoRedeem', payload: { svc_key: cfg.key, ticket: String(ticket), aud: 'bulletin' } }), redirect: 'error', signal: AbortSignal.timeout(o.timeoutMs || 8000) });
+      body: JSON.stringify({ action: 'svcSsoRedeem', payload: { svc_key: cfg.key, ticket: String(ticket), aud: want } }), redirect: 'error', signal: AbortSignal.timeout(o.timeoutMs || 8000) });
     if (res.status !== 200) throw new Error('HTTP ' + res.status);
     j = await res.json();
   } catch (e) { throw down(e && e.name === 'TimeoutError' ? '逾時' : String(e && e.message || e).replace(cfg.key, '***')); }
-  if (j && j.ok === true && j.data && /^DZY[0-9]{3}$/.test(String(j.data.emp_no || ''))) return String(j.data.emp_no);
+  const d = j && j.ok === true ? j.data : null;
+  if (d && want === 'bulletin' && /^DZY[0-9]{3}$/.test(String(d.emp_no || ''))) return { emp_no: String(d.emp_no) };
+  if (d && want === 'bulletin-admin' && d.admin === true) return { admin: true, emp_no: String(d.emp_no || '').slice(0, 20), uid: String(d.uid || '').slice(0, 40), name: String(d.name || '').slice(0, 40) };
   if (j && j.ok === false && j.code === 'ticket_invalid') return null;
   throw down('管理系統拒絕' + (j && j.code ? '（' + String(j.code).slice(0, 30) + '）' : ''));
 }

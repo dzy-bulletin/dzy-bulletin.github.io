@@ -47,7 +47,11 @@ eq('token null', A.verifyStaffToken(SECRET, null, row), false);
 // C7 管理憑證
 const now = 1759200000000;
 const at = A.makeAdminToken(SECRET, 1, now + 12 * 3600e3);
-eq('admin ok', A.verifyAdminToken(SECRET, at, 1, now), true);
+eq('admin ok（通行碼憑證回種類 A）', A.verifyAdminToken(SECRET, at, 1, now), 'A');
+{ const dt = A.makeAdminToken(SECRET, 1, now + 3600e3, 'D');
+  eq('管理系統憑證回種類 D', A.verifyAdminToken(SECRET, dt, 1, now), 'D');
+  eq('D 改字首成 A 驗不過（種類在簽章裡）', A.verifyAdminToken(SECRET, 'A' + dt.slice(1), 1, now), false);
+  eq('不認得的種類一律驗不過', A.verifyAdminToken(SECRET, 'X' + dt.slice(1), 1, now), false); }
 eq('admin expired', A.verifyAdminToken(SECRET, at, 1, now + 13 * 3600e3), false);
 eq('admin ver changed', A.verifyAdminToken(SECRET, at, 2, now), false);
 eq('admin tampered exp', A.verifyAdminToken(SECRET, at.replace(String(now + 12 * 3600e3), String(now + 99 * 3600e3)), 1, now), false);
