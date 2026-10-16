@@ -74,6 +74,8 @@ function config(env) {
     PIN_PER_HOUR: Number(env.PIN_PER_HOUR) > 0 ? Math.floor(Number(env.PIN_PER_HOUR)) : 60,
     STAFF_SOURCE: String(env.STAFF_SOURCE || 'clock').trim().toLowerCase() === 'dzy' ? 'dzy' : 'clock',   // 同仁名單來源（預設 clock＝打卡同步）；dzy 要搬家腳本通過才生效，見 server/staff-dzy.js
     LINE_VERIFY_URL: env.LINE_VERIFY_URL || 'https://api.line.me/oauth2/v2.1/verify',   // 只給測試指到本機假 LINE
+    DZY_PER_MIN: Number(env.DZY_LOGIN_PER_MIN) > 0 ? Math.floor(Number(env.DZY_LOGIN_PER_MIN)) : 10,
+    DZY_GLOBAL_PER_MIN: Number(env.DZY_LOGIN_GLOBAL_PER_MIN) > 0 ? Math.floor(Number(env.DZY_LOGIN_GLOBAL_PER_MIN)) : 40,   // 要低於平台每分鐘上限（120），留空間給名單同步
     // 管理系統入場券兌換（dzyLogin）：與 staff-dzy.js 同一組本機平台網址＋服務金鑰
     DZY: { url: String(env.DZY_PLATFORM_URL || '').trim(), key: String(env.BULLETIN_SVC_KEY || '') }
   };
@@ -173,9 +175,9 @@ function makeApp(cfg) {
         pre.line = await verifyLineToken(cfg.LINE_VERIFY_URL, cfg.LINE_CHANNEL_ID, String(tok), Date.now());
       })) },
       // 管理系統入場券（dzyLogin，2026-10-16）：同 LINE 的做法，交易外 await 本機平台 svcSsoRedeem，第二輪拿結果（null＝券無效）。
-      // 限流與 LINE 登入共用一組（每 IP／全體每分鐘）。E2E 不連平台：'e2e0' 開頭的券＝DZY＋最後 3 碼
+      // 限流自己一組（dzyBusy，每 IP／全體每分鐘）。E2E 不連平台：'e2e0' 開頭的券＝DZY＋最後 3 碼
       dzyRedeem: { redeem: (t) => (pre.dzy !== undefined ? pre.dzy : want(pre, async () => {
-        if (lineBusy(pre.ip)) { const be = new Error('登入的人太多，請稍後再試'); be.code = 'BUSY'; be.business = true; throw be; }
+        if (dzyBusy(pre.ip)) { const be = new Error('登入的人太多，請稍後再試'); be.code = 'BUSY'; be.business = true; throw be; }
         if (E2E) { pre.dzy = /^e2e0[0-9a-f]{57}[0-9]{3}$/.test(String(t)) ? 'DZY' + String(t).slice(-3) : null; return; }
         try { pre.dzy = await redeemTicket(cfg.DZY, String(t)); }
         catch (e) { if (e && e.detail) console.error(ts() + ' 管理系統入場券兌換失敗：' + e.detail); throw e; }
@@ -192,21 +194,27 @@ function makeApp(cfg) {
   // lineLogin 限流（每個程序記憶體、滑動 1 分鐘；#32-5）：每次驗證都要打 LINE 的 verify API，公開網址不能讓人無限轉送。
   // 有 X-Forwarded-For 時以來源 IP 分桶（每 IP LINE_PER_MIN），另有全體加總上限（LINE_GLOBAL_PER_MIN）——
   // 換 IP 也只會撞到全體上限（全體被擋時同仁退回選名字＋密碼，功能仍在）。
-  const lineByIp = new Map(), lineAll = [];
   const prune = (arr, now) => { while (arr.length && now - arr[0] >= 60e3) arr.shift(); };
   // ip 為空（沒有 X-Forwarded-For）：只套全體上限——經 Funnel 進來的 socket 一律是本機，拿它分桶等於全部人共用 10 次（#32-8）
-  function lineBusy(ip) {
-    const now = Date.now();
-    prune(lineAll, now);
-    let mine = null;
-    if (ip) {
-      mine = lineByIp.get(ip) || [];
-      prune(mine, now);
-      if (lineByIp.size > 5000) for (const [k, v] of lineByIp) { prune(v, now); if (!v.length) lineByIp.delete(k); }   // 不讓 Map 無限長大
-    }
-    if ((mine && mine.length >= cfg.LINE_PER_MIN) || lineAll.length >= cfg.LINE_GLOBAL_PER_MIN) return true;
-    lineAll.push(now); if (mine) { mine.push(now); lineByIp.set(ip, mine); } return false;
+  function makeBusy(perIp, global) {
+    const byIp = new Map(), all = [];
+    return function busy(ip) {
+      const now = Date.now();
+      prune(all, now);
+      let mine = null;
+      if (ip) {
+        mine = byIp.get(ip) || [];
+        prune(mine, now);
+        if (byIp.size > 5000) for (const [k, v] of byIp) { prune(v, now); if (!v.length) byIp.delete(k); }   // 不讓 Map 無限長大
+      }
+      if ((mine && mine.length >= perIp) || all.length >= global) return true;
+      all.push(now); if (mine) { mine.push(now); byIp.set(ip, mine); } return false;
+    };
   }
+  const lineBusy = makeBusy(cfg.LINE_PER_MIN, cfg.LINE_GLOBAL_PER_MIN);
+  // dzyLogin 另開一組（審查 #42-1）：每次兌換都打本機平台，而平台看到的來源一律是 127.0.0.1、與名單同步共用一個每分鐘上限；
+  // 全體上限壓在平台上限之下，外人灌垃圾券最多讓 SSO 暫時退回選名字，打不掛平台與名單同步，也不影響 LINE 登入
+  const dzyBusy = makeBusy(cfg.DZY_PER_MIN, cfg.DZY_GLOBAL_PER_MIN);
   // 密碼登入／設密碼限流（只按來源 IP；沒有 X-Forwarded-For 就不限，見 #32-8）
   const pinByIp = new Map();
   function pinBusy(ip) {

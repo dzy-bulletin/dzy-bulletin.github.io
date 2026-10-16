@@ -78,7 +78,7 @@ const fakeRedeem = { redeem: (t) => (/^e2e0[0-9a-f]{57}[0-9]{3}$/.test(t) ? 'DZY
 
   // ---------- 3. 伺服器端到端（E2E：'e2e0…###' 假券） ----------
   const port = await new Promise((ok) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => ok(p)); }); });
-  const env = Object.assign({}, process.env, { DZYB_NO_DOTENV: '1', E2E: '1', PORT: String(port), DATA_DIR: tmp('dzyb-sso-srv-'), HOME: tmp('dzyb-sso-home-'), LINE_LOGIN_PER_MIN: '4', LINE_LOGIN_GLOBAL_PER_MIN: '50' });
+  const env = Object.assign({}, process.env, { DZYB_NO_DOTENV: '1', E2E: '1', PORT: String(port), DATA_DIR: tmp('dzyb-sso-srv-'), HOME: tmp('dzyb-sso-home-'), DZY_LOGIN_PER_MIN: '4', DZY_LOGIN_GLOBAL_PER_MIN: '6' });
   ['BRIDGE_URL', 'BRIDGE_KEY', 'ALLOW_ORIGIN', 'DZY_PLATFORM_URL', 'BULLETIN_SVC_KEY'].forEach((k) => delete env[k]);
   const p = spawn(process.execPath, [path.join(__dirname, '..', 'server/index.js')], { env, stdio: ['ignore', 'pipe', 'pipe'] });
   procs.push(p);
@@ -104,9 +104,10 @@ const fakeRedeem = { redeem: (t) => (/^e2e0[0-9a-f]{57}[0-9]{3}$/.test(t) ? 'DZY
   eq('伺服器 dzyLogin：沒有編號的同仁 → DZY_NOT_LINKED', (await post({ action: 'dzyLogin', ticket: T('002') }, IP)).code, 'DZY_NOT_LINKED');
   eq('伺服器 dzyLogin：假券以外 → DZY_BAD', (await post({ action: 'dzyLogin', ticket: 'f'.repeat(64) }, IP)).code, 'DZY_BAD');
   eq('伺服器 dzyLogin：同一 IP 第 4 次仍可', (await post({ action: 'dzyLogin', ticket: T('001') }, IP)).ok, true);
-  eq('伺服器 dzyLogin：同一 IP 第 5 次 → BUSY（與 LINE 登入共用限流）', (await post({ action: 'dzyLogin', ticket: T('001') }, IP)).code, 'BUSY');
-  eq('伺服器 限流共用：同一 IP 的 LINE 登入也被擋', (await post({ action: 'lineLogin', idToken: 'TEST:U-x' }, IP)).code, 'BUSY');
-  eq('伺服器 dzyLogin：格式錯不算進限流、別的 IP 照常', [(await post({ action: 'dzyLogin', ticket: 'x' }, '203.0.113.8')).code, (await post({ action: 'dzyLogin', ticket: T('001') }, '203.0.113.8')).ok], ['BAD_REQ', true]);
+  eq('伺服器 dzyLogin：同一 IP 第 5 次 → BUSY', (await post({ action: 'dzyLogin', ticket: T('001') }, IP)).code, 'BUSY');
+  eq('伺服器 限流分開（審查 #42-1）：dzyLogin 被擋時同一 IP 的 LINE 登入不受影響', (await post({ action: 'lineLogin', idToken: 'TEST:U-x' }, IP)).code, 'LINE_NOT_LINKED');
+  eq('伺服器 dzyLogin：格式錯不算進限流、別的 IP 照常（全體第 5、6 次）', [(await post({ action: 'dzyLogin', ticket: 'x' }, '203.0.113.8')).code, (await post({ action: 'dzyLogin', ticket: T('001') }, '203.0.113.8')).ok, (await post({ action: 'dzyLogin', ticket: T('001') }, '203.0.113.9')).ok], ['BAD_REQ', true, true]);
+  eq('伺服器 dzyLogin：全體超過上限 → BUSY（換 IP 也一樣）', (await post({ action: 'dzyLogin', ticket: T('001') }, '203.0.113.10')).code, 'BUSY');
 
   procs.forEach((x) => { try { x.kill(); } catch (e) {} });
   tmps.forEach((d) => { try { fs.rmSync(d, { recursive: true, force: true }); } catch (e) {} });
