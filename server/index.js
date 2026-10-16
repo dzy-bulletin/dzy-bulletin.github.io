@@ -26,7 +26,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { effectiveSource, sourceWarning } = require('./staff-dzy.js');
+const { effectiveSource, sourceWarning, redeemTicket } = require('./staff-dzy.js');
 
 const ROOT = path.join(__dirname, '..');
 const MIN_NODE = 24;                                        // node:sqlite 的 DatabaseSync 不需旗標；DEPLOY.md 寫同一個數字
@@ -73,7 +73,9 @@ function config(env) {
     PIN_PER_MIN: Number(env.PIN_PER_MIN) > 0 ? Math.floor(Number(env.PIN_PER_MIN)) : 3,       // 密碼登入＋設密碼：每個來源 IP 每分鐘／每小時上限（2026-10-14 審查：防逐一列舉誰沒密碼、亂猜讓啟用碼作廢）
     PIN_PER_HOUR: Number(env.PIN_PER_HOUR) > 0 ? Math.floor(Number(env.PIN_PER_HOUR)) : 60,
     STAFF_SOURCE: String(env.STAFF_SOURCE || 'clock').trim().toLowerCase() === 'dzy' ? 'dzy' : 'clock',   // 同仁名單來源（預設 clock＝打卡同步）；dzy 要搬家腳本通過才生效，見 server/staff-dzy.js
-    LINE_VERIFY_URL: env.LINE_VERIFY_URL || 'https://api.line.me/oauth2/v2.1/verify'   // 只給測試指到本機假 LINE
+    LINE_VERIFY_URL: env.LINE_VERIFY_URL || 'https://api.line.me/oauth2/v2.1/verify',   // 只給測試指到本機假 LINE
+    // 管理系統入場券兌換（dzyLogin）：與 staff-dzy.js 同一組本機平台網址＋服務金鑰
+    DZY: { url: String(env.DZY_PLATFORM_URL || '').trim(), key: String(env.BULLETIN_SVC_KEY || '') }
   };
 }
 // 兩個路徑是否指同一個資料夾：存在就取真實路徑（解開符號連結），macOS APFS 預設不分大小寫，所以一律小寫比對（第 2 輪建議 3）
@@ -169,6 +171,14 @@ function makeApp(cfg) {
         if (lineBusy(pre.ip)) { const be = new Error('登入的人太多，請稍後再試'); be.code = 'BUSY'; be.business = true; throw be; }
         if (E2E) { const m = /^TEST:(.{1,64})$/.exec(String(tok)); pre.line = m ? m[1] : null; return; }
         pre.line = await verifyLineToken(cfg.LINE_VERIFY_URL, cfg.LINE_CHANNEL_ID, String(tok), Date.now());
+      })) },
+      // 管理系統入場券（dzyLogin，2026-10-16）：同 LINE 的做法，交易外 await 本機平台 svcSsoRedeem，第二輪拿結果（null＝券無效）。
+      // 限流與 LINE 登入共用一組（每 IP／全體每分鐘）。E2E 不連平台：'e2e0' 開頭的券＝DZY＋最後 3 碼
+      dzyRedeem: { redeem: (t) => (pre.dzy !== undefined ? pre.dzy : want(pre, async () => {
+        if (lineBusy(pre.ip)) { const be = new Error('登入的人太多，請稍後再試'); be.code = 'BUSY'; be.business = true; throw be; }
+        if (E2E) { pre.dzy = /^e2e0[0-9a-f]{57}[0-9]{3}$/.test(String(t)) ? 'DZY' + String(t).slice(-3) : null; return; }
+        try { pre.dzy = await redeemTicket(cfg.DZY, String(t)); }
+        catch (e) { if (e && e.detail) console.error(ts() + ' 管理系統入場券兌換失敗：' + e.detail); throw e; }
       })) }
     };
   }
@@ -213,7 +223,7 @@ function makeApp(cfg) {
     for (let round = 0; round < 3; round++) {
       pre.need = null; pre.revoke = [];
       const sh = shims(pre);
-      const svc = makeService_(L, store, sh.files, auth, clock, sh.clockSrc, sh.lineVerify, { staffSource: staffSource() });
+      const svc = makeService_(L, store, sh.files, auth, clock, sh.clockSrc, sh.lineVerify, { staffSource: staffSource(), dzyRedeem: sh.dzyRedeem });
       const out = WRITE.has(action)
         ? store.tx(() => { if (frozen()) return MOVED; store.purgeReqs(Date.now()); return svc.call(action, structuredClone(q)); })
         : svc.call(action, structuredClone(q));
@@ -328,7 +338,7 @@ function makeApp(cfg) {
       const salt = x.pin ? auth.newSalt() : '';
       return { id: x.id, name: x.name, unit: x.unit, salt, pinHash: x.pin ? auth.hashPin(salt, x.pin) : '', pinVer: 1, fail: x.fail || 0,
         active: true, createdAt: '2026-01-01T00:00:00.000Z', deletedAt: '', src: x.src || '', store: x.store || '',
-        lineHash: x.lineUid ? auth.lineHash(x.lineUid) : '',
+        lineHash: x.lineUid ? auth.lineHash(x.lineUid) : '', dzy: x.dzy || '',
         act: x.code ? (() => { const s2 = auth.newSalt(); return '4102444800000.' + s2 + '.' + auth.hashPin(s2, x.code) + '.0'; })() : '' };   // 帶入的 code＝還沒用的啟用碼
     });
     const posts = d.posts.map((p) => Object.assign({ body: '', expiresOn: '', pinned: false, published: true, offOn: '', files: [],
