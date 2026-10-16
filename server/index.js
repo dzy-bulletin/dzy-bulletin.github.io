@@ -175,11 +175,16 @@ function makeApp(cfg) {
         pre.line = await verifyLineToken(cfg.LINE_VERIFY_URL, cfg.LINE_CHANNEL_ID, String(tok), Date.now());
       })) },
       // 管理系統入場券（dzyLogin，2026-10-16）：同 LINE 的做法，交易外 await 本機平台 svcSsoRedeem，第二輪拿結果（null＝券無效）。
-      // 限流自己一組（dzyBusy，每 IP／全體每分鐘）。E2E 不連平台：'e2e0' 開頭的券＝DZY＋最後 3 碼
-      dzyRedeem: { redeem: (t) => (pre.dzy !== undefined ? pre.dzy : want(pre, async () => {
+      // 限流自己一組（dzyBusy，每 IP／全體每分鐘）。E2E 不連平台：'e2e0…###' 券＝同仁 DZY###；'e2ea…###' 券＝公告管理（admin）
+      dzyRedeem: { redeem: (t, aud) => (pre.dzy !== undefined ? pre.dzy : want(pre, async () => {
         if (dzyBusy(pre.ip)) { const be = new Error('登入的人太多，請稍後再試'); be.code = 'BUSY'; be.business = true; throw be; }
-        if (E2E) { pre.dzy = /^e2e0[0-9a-f]{57}[0-9]{3}$/.test(String(t)) ? 'DZY' + String(t).slice(-3) : null; return; }
-        try { pre.dzy = await redeemTicket(cfg.DZY, String(t)); }
+        if (E2E) {
+          const m = /^e2e([0a])[0-9a-f]{57}([0-9]{3})$/.exec(String(t));
+          pre.dzy = !m ? null : aud === 'bulletin' && m[1] === '0' ? { emp_no: 'DZY' + m[2] }
+            : aud === 'bulletin-admin' && m[1] === 'a' ? { admin: true, emp_no: 'DZY' + m[2], uid: '', name: '測試主管' } : null;
+          return;
+        }
+        try { pre.dzy = await redeemTicket(cfg.DZY, String(t), aud); }
         catch (e) { if (e && e.detail) console.error(ts() + ' 管理系統入場券兌換失敗：' + e.detail); throw e; }
       })) }
     };

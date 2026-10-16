@@ -20,11 +20,18 @@ var Staff = (function () {
       $('testMe').onclick = function () { DZYB_MOCK.testerReset(); clearMe(); v.board = v.hist = null; UI.toast('測試員的密碼與簽名已清除'); picker(true, 'mala'); };
     }
     $('openAdmin').onclick = function () { Admin.open(); };
+    // 正式網址（非 DEV）：「⚙ 設定」「主管設定」「不是我」一律不顯示（2026-10-17 Eason）；公告管理改從管理系統「公告專區」進
+    if (!CFG.DEV) document.body.classList.add('prod');
     // LINE 自動登入（line.html）失敗時留下的一次性提示：顯示一次就刪
     var flash = UI.store.get('flash'); if (flash) UI.store.del('flash');
     // msg：管理系統自動登入沒成功的原因（沒對到名單、暫時連不上…），有就取代 flash 讓同仁知道為什麼要選名字（審查 #42-3）
     function normal(msg) { var m = msg || flash; if (loggedIn()) { loadBoard(); if (m) UI.toast(m); } else picker(true, undefined, m); }
-    if (embedDzy()) { $('app').innerHTML = '<p style="padding:32px 16px;text-align:center;color:#6b6b6b">正在用管理系統帳號登入…</p>'; dzySso(normal); return; }
+    if (embedDzy()) {
+      // 管理系統「公告管理／新增公告」分頁（?embed=dzy&view=posts|new）：換管理憑證，整頁就是設定畫面
+      var av = new URLSearchParams(location.search).get('view');
+      if (av === 'posts' || av === 'new') { Admin.openEmbedded(av); return; }
+      $('app').innerHTML = '<p style="padding:32px 16px;text-align:center;color:#6b6b6b">正在用管理系統帳號登入…</p>'; dzySso(normal); return;
+    }
     normal();
   }
 
@@ -34,14 +41,23 @@ var Staff = (function () {
   function embedDzy() {
     try { return CFG.MODE === 'cloud' && window.parent !== window && new URLSearchParams(location.search).get('embed') === 'dzy'; } catch (e) { return false; }
   }
-  function dzySso(fallback) {
+  // 跟上層（管理系統）要一張入場券：onTicket(ticket 或 null)。只認 CFG.DZY_ORIGIN 的上層視窗；15 秒沒回＝null
+  function askTicket(onTicket) {
     var settled = false, timer = null;
     function stop() { settled = true; window.removeEventListener('message', onMsg); clearTimeout(timer); }
     function onMsg(e) {
       if (settled || e.origin !== CFG.DZY_ORIGIN || e.source !== window.parent || !e.data || e.data.type !== 'dzy-sso') return;
       stop();
       var t = e.data.ticket;
-      if (typeof t !== 'string' || !/^[0-9a-f]{64}$/.test(t)) return fallback();   // 沒券＝系統帳號，不用解釋
+      onTicket(typeof t === 'string' && /^[0-9a-f]{64}$/.test(t) ? t : null);
+    }
+    window.addEventListener('message', onMsg);
+    timer = setTimeout(function () { if (!settled) { stop(); onTicket(null); } }, 15000);
+    try { window.parent.postMessage({ type: 'dzyb-sso-ready' }, CFG.DZY_ORIGIN); } catch (e) { stop(); onTicket(null); }
+  }
+  function dzySso(fallback) {
+    askTicket(function (t) {
+      if (!t) return fallback();   // 沒券＝系統帳號或管理系統沒回，不用解釋
       API.call('dzyLogin', { ticket: t }).then(function (r) {
         if (!r.ok || !r.data || !r.data.me) return fallback(r && r.code !== 'BAD_REQ' ? r.message : '');
         var d = r.data, old = me();
@@ -53,18 +69,16 @@ var Staff = (function () {
         UI.toast('你好，' + d.me.name);
         if (d.board) { v.board = d.board; cacheBoard(d.board); renderMe(); render(); } else loadBoard();
       }).catch(function () { fallback(); });   // 任何例外都不能讓畫面卡在「正在登入…」（審查 #42-2）
-    }
-    window.addEventListener('message', onMsg);
-    // 管理系統換券通常一秒內；給 15 秒容忍 Mac mini 偶發慢（審查 #42-5）
-    timer = setTimeout(function () { if (!settled) { stop(); fallback(); } }, 15000);
-    try { window.parent.postMessage({ type: 'dzyb-sso-ready' }, CFG.DZY_ORIGIN); } catch (e) { stop(); fallback(); }
+    });
   }
+
   function clearMe() { UI.store.del('token'); UI.store.del('me'); UI.store.del('board'); UI.store.del('needPin'); renderMe(); $('app').innerHTML = ''; }   // 名單快取（roster）保留：換人時秒開
   function logout(msg) {
     var m = me(), g = m ? (m.unit.indexOf('hq-') === 0 ? 'hq' : m.unit) : undefined;   // 登出後名單停在原本的分組
     clearMe(); v.board = v.hist = null; if (msg) UI.toast(msg); picker(true, g);
   }
   function onSheetClosed() {
+    if (document.body.classList.contains('embed-admin')) return;   // 管理系統的公告管理分頁：整頁就是設定畫面，不跳選名字
     if (!loggedIn()) setTimeout(function () { picker(true); }, 0);
     else if (typeof Admin !== 'undefined' && Admin.takeDirty()) loadBoard();
   }
@@ -143,7 +157,7 @@ var Staff = (function () {
         (notice ? '<div class="err" id="pkNotice" style="margin:0 0 8px">' + esc(notice) + '</div>' : '') +
         '<div class="hint" style="margin:0 0 10px">選自己的名字並輸入 4 位數密碼（第一次使用會請你設定）。這支手機會記住你，按「我已閱讀」時會請你手寫簽名。</div>' +
         '<div class="seg">' + GROUPS.map(function (u) { return '<button data-pu="' + u.id + '" class="' + (u.id === cur ? 'on' : '') + '">' + u.name + '</button>'; }).join('') + '</div>' +
-        body + '<div class="hint" style="margin-top:14px">找不到自己的名字？請洽主管在「設定 → 同仁名單」新增。</div>' +
+        body + '<div class="hint" style="margin-top:14px">' + (CFG.DEV ? '找不到自己的名字？請洽主管在「設定 → 同仁名單」新增。' : '找不到自己的名字？請洽人資在管理系統「同仁名單」新增，或從管理系統「公告專區」直接進來。') + '</div>' +
         '<button class="btn ghost" id="toAdmin" style="margin-top:6px">⚙ 主管設定</button></div>', lock);
       s.querySelector('#toAdmin').onclick = function () { done = true; Admin.open(); };
       s.querySelectorAll('[data-pu]').forEach(function (b) { b.onclick = function () { cur = b.dataset.pu; curStore = null; draw(); }; });
@@ -401,5 +415,5 @@ var Staff = (function () {
     };
   }
 
-  return { start: start, logout: logout, onSheetClosed: onSheetClosed, loadBoard: loadBoard, picker: picker, me: me, saveLogin: saveLogin };
+  return { start: start, embedDzy: embedDzy, askTicket: askTicket, logout: logout, onSheetClosed: onSheetClosed, loadBoard: loadBoard, picker: picker, me: me, saveLogin: saveLogin };
 })();
