@@ -144,3 +144,6 @@ textarea.inp{min-height:120px;resize:vertical}
 .embed-admin .mask,.embed-admin .mask.show{position:static;display:block;background:none;padding:0}
 .embed-admin .sheet{max-width:820px;margin:0 auto;max-height:none;overflow:visible;border-radius:0;box-shadow:none}
 .embed-admin .sheet .bar{border-radius:0}
+/* 管理系統公告專區嵌入（?embed=dzy，2026-10-20）：標題列與「公告／歷史區」切換交給管理系統的頁頂分頁列 */
+.embed-dzy header.top,.embed-dzy #app>.tabs{display:none}
+.embed-dzy #app>.seg{margin-top:12px}

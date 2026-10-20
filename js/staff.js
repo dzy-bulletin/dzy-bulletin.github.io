@@ -5,6 +5,8 @@ var Staff = (function () {
   var FORGOT = '請主管到「設定 → 同仁名單」按「重設密碼」，主管會拿到一組啟用碼給你，用它設定新密碼。';
   var FIRST = '有用 LINE 打卡的人：從 LINE「鼎兆元打卡」選單點「佈告欄」就能直接進來，不用密碼。<br>沒有用 LINE 打卡的人：請主管到「設定 → 同仁名單」幫你產生啟用碼，輸入啟用碼後設定自己的密碼。';
   var v = { tab: 'board', unit: null, month: null, board: null, hist: null, loading: false, refreshing: false, error: null };
+  // 管理系統要停在哪個分頁（公告／歷史區）：嵌入時由上層的 dzy-bulletin-nav 訊息決定，登入完成後照這個顯示
+  var embedTab = 'board';
 
   function me() { try { return JSON.parse(UI.store.get('me')); } catch (e) { return null; } }
   function loggedIn() { return !!(UI.store.get('token') && me()); }
@@ -25,8 +27,11 @@ var Staff = (function () {
     // LINE 自動登入（line.html）失敗時留下的一次性提示：顯示一次就刪
     var flash = UI.store.get('flash'); if (flash) UI.store.del('flash');
     // msg：管理系統自動登入沒成功的原因（沒對到名單、暫時連不上…），有就取代 flash 讓同仁知道為什麼要選名字（審查 #42-3）
-    function normal(msg) { var m = msg || flash; if (loggedIn()) { loadBoard(); if (m) UI.toast(m); } else picker(true, undefined, m); }
+    function normal(msg) { var m = msg || flash; if (loggedIn()) { show(); if (m) UI.toast(m); } else picker(true, undefined, m); }
     if (embedDzy()) {
+      // 2026-10-20：嵌在管理系統裡不顯示自己的藍色標題列；「公告／歷史區」改由管理系統頁頂分頁列切換（css .embed-dzy）
+      document.body.classList.add('embed-dzy');
+      listenNav();
       // 管理系統「公告管理／新增公告」分頁（?embed=dzy&view=posts|new）：換管理憑證，整頁就是設定畫面
       var av = new URLSearchParams(location.search).get('view');
       if (av === 'posts' || av === 'new') { Admin.openEmbedded(av); return; }
@@ -55,6 +60,19 @@ var Staff = (function () {
     timer = setTimeout(function () { if (!settled) { stop(); onTicket(null); } }, 15000);
     try { window.parent.postMessage({ type: 'dzyb-sso-ready' }, CFG.DZY_ORIGIN); } catch (e) { stop(); onTicket(null); }
   }
+  // 上層（管理系統）換分頁 → {type:'dzy-bulletin-nav', v:1, p:'board'|'hist'}。只認 CFG.DZY_ORIGIN 的上層視窗
+  function listenNav() {
+    window.addEventListener('message', function (e) {
+      if (e.origin !== CFG.DZY_ORIGIN || e.source !== window.parent || !e.data || e.data.type !== 'dzy-bulletin-nav' || e.data.v !== 1) return;
+      if (e.data.p !== 'board' && e.data.p !== 'hist') return;
+      embedTab = e.data.p;
+      if (document.body.classList.contains('embed-admin')) return;
+      if (!loggedIn()) { v.tab = embedTab; return; }   // 還在選名字：登入後照這個分頁顯示
+      if (UI.sheetOpen()) UI.closeSheet();   // 公告內容還開著就關掉（跟按分頁一樣回到清單）
+      if (v.tab === embedTab && (embedTab === 'hist' ? v.hist : v.board)) return;
+      v.tab = embedTab; show();
+    });
+  }
   function dzySso(fallback) {
     askTicket(function (t) {
       if (!t) return fallback();   // 沒券＝系統帳號或管理系統沒回，不用解釋
@@ -65,9 +83,10 @@ var Staff = (function () {
         saveLogin(d);
         // 瀏覽器擋第三方儲存時（例如 Chrome 封鎖第三方 Cookie）寫入會被吞掉：看起來登入了、下一個動作卻被登出（審查 #42-4）
         if (UI.store.get('token') !== d.token) return fallback('這個瀏覽器擋住了框框裡的登入資料，請按上方「在新分頁開啟」');
-        v.unit = L.homeTab(d.me.unit); v.tab = 'board'; v.board = v.hist = null;
+        v.unit = L.homeTab(d.me.unit); v.tab = embedTab; v.board = v.hist = null;
         UI.toast('你好，' + d.me.name);
-        if (d.board) { v.board = d.board; cacheBoard(d.board); renderMe(); render(); } else loadBoard();
+        if (d.board) { v.board = d.board; cacheBoard(d.board); renderMe(); render(); } else if (v.tab !== 'hist') loadBoard();
+        if (v.tab === 'hist') { renderMe(); loadHistory(); }
       }).catch(function () { fallback(); });   // 任何例外都不能讓畫面卡在「正在登入…」（審查 #42-2）
     });
   }
@@ -301,10 +320,11 @@ var Staff = (function () {
   }
   function enter(d) {
     saveLogin(d); patchRoster(d.me.id, { hasPin: true, locked: false });
-    v.unit = L.homeTab(d.me.unit); v.tab = 'board'; v.board = v.hist = null;
+    v.unit = L.homeTab(d.me.unit); v.tab = embedTab; v.board = v.hist = null;
     UI.closeSheet(); UI.toast('你好，' + d.me.name);
     if (d.board) { v.board = d.board; cacheBoard(d.board); renderMe(); render(); }   // 登入回應已含公告，不用再等一次
-    else loadBoard();
+    else if (v.tab !== 'hist') loadBoard();
+    if (v.tab === 'hist') { renderMe(); loadHistory(); }
   }
   // 上次的公告存在這支手機：再次打開時先顯示，背景更新（Apps Script 回應常要數秒到數十秒）
   function cacheBoard(b) { UI.store.set('board', JSON.stringify({ id: b.me.id, b: b })); }
@@ -332,6 +352,8 @@ var Staff = (function () {
       v.hist = r.data; render();
     });
   }
+  // 依目前分頁載入（公告或歷史區）
+  function show() { if (v.tab === 'hist') { renderMe(); loadHistory(); } else loadBoard(); }
   function reads() { return (v.tab === 'hist' ? v.hist : v.board || {}).myReads || {}; }
   function iTarget(p) { var m = me(); return !!m && L.mustSign(m.unit, p); }
 
@@ -351,7 +373,7 @@ var Staff = (function () {
         return '<button data-unit="' + u.id + '" class="' + (v.unit === u.id ? 'on' : '') + '">' + u.name + (n ? '<span class="n">' + n + '</span>' : '') + '</button>';
       }).join('') + '</div>';
     if (v.refreshing) h += '<div class="hint" style="text-align:center">更新中…</div>';
-    if (v.loading) h += '<div class="loading">載入中</div>';
+    if (v.loading || (v.tab === 'hist' && !v.hist && !v.error)) h += '<div class="loading">載入中</div>';
     else if (v.error) h += '<div class="errbox" id="errMsg"></div><button class="btn ghost" id="retry">重試</button>';
     else if (v.tab === 'board' && v.board) {
       var list = v.board.posts.filter(function (p) { return p.units.indexOf(v.unit) >= 0; });
@@ -368,7 +390,7 @@ var Staff = (function () {
     app.innerHTML = h;
     if (v.error) { $('errMsg').textContent = v.error; $('retry').onclick = function () { v.tab === 'hist' ? loadHistory() : loadBoard(); }; }
     app.querySelectorAll('[data-tab]').forEach(function (b) {
-      b.onclick = function () { v.tab = b.dataset.tab; if (v.tab === 'hist') loadHistory(); else loadBoard(); };
+      b.onclick = function () { v.tab = b.dataset.tab; show(); };
     });
     app.querySelectorAll('[data-unit]').forEach(function (b) { b.onclick = function () { v.unit = b.dataset.unit; render(); }; });
     app.querySelectorAll('[data-month]').forEach(function (b) { b.onclick = function () { v.month = b.dataset.month; render(); }; });

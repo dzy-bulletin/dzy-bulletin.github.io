@@ -2,14 +2,15 @@
 兩邊串起來的瀏覽器實測：管理系統（本機檔案，假裝在 https://dzy.mozhuting.com）嵌入佈告欄（本機檔案，假裝在 https://dzy-bulletin.github.io），
 佈告欄 API 轉到本機 E2E 佈告欄伺服器；平台後端用 dzy e2e 的 MockBackend，另補 ssoTicket。"""
 import os, sys, json, mimetypes, subprocess, socket, time, urllib.request
-sys.path.insert(0, os.path.expanduser('~/dzy/test/e2e'))
+DZY = os.environ.get('DZY_DIR') or os.path.expanduser('~/dzy')   # 管理系統 repo（可指到 worktree）
+sys.path.insert(0, os.path.join(DZY, 'test/e2e'))
 from common import MockBackend, USERS
 from playwright.sync_api import sync_playwright
 
 OUT = sys.argv[1] if len(sys.argv) > 1 else '/tmp'
-if not os.path.isdir(os.path.expanduser('~/dzy/test/e2e')):
+if not os.path.isdir(os.path.join(DZY, 'test/e2e')):
     print('SKIP：找不到 ~/dzy'); sys.exit(0)
-DZY = os.path.expanduser('~/dzy'); BUL = os.path.expanduser('~/dzy-bulletin')
+BUL = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 T = lambda n: 'e2e0' + '0' * 57 + n
 TA = lambda n: 'e2ea' + '0' * 57 + n   # 公告管理券（E2E 伺服器認 e2ea 開頭）
 
@@ -29,7 +30,8 @@ def bpost(path, body):
     r = urllib.request.Request('http://127.0.0.1:%d%s' % (port, path), data=json.dumps(body).encode(), headers={'Content-Type': 'text/plain'})
     return json.loads(urllib.request.urlopen(r).read())
 bpost('/__seed', {'staff': [{'id': 'S-001', 'name': '測試同仁甲', 'unit': 'mala', 'pin': '2580', 'dzy': 'DZY001'}, {'id': 'S-002', 'name': '測試同仁乙', 'unit': 'mala', 'pin': '1357'}],
-                  'posts': [{'id': 'P-1', 'title': '單一登入測試公告', 'units': ['mala', 'mzt', 'cf'], 'publishOn': '2026-01-01'}], 'reads': [], 'adminPass': 'adminpass88', 'clock': []})
+                  'posts': [{'id': 'P-1', 'title': '單一登入測試公告', 'units': ['mala', 'mzt', 'cf'], 'publishOn': '2026-01-01'},
+                            {'id': 'P-2', 'title': '已封存的舊公告', 'units': ['mala', 'mzt', 'cf'], 'publishOn': '2026-01-01', 'expiresOn': '2026-02-01'}], 'reads': [], 'adminPass': 'adminpass88', 'clock': []})
 
 def serve_static(root, prefix):
     def h(route):
@@ -92,6 +94,8 @@ try:
             if act: act(page, fr, info)
             page.screenshot(path=os.path.join(OUT, 'sso_' + name + '.png'))
             info['text'] = fr.locator('body').inner_text()
+            info['chrome'] = fr.locator('body').evaluate("() => ['header.top', '#app > .tabs'].filter(q => { const n = document.querySelector(q); return n && n.offsetParent; })")
+            info['url'] = page.url
             info['visible'] = fr.locator('body').evaluate("() => ['#openAdmin','#toAdmin','#chgMe','[data-at=\"staff\"]','.sheet .seg'].filter(q => { const n = document.querySelector(q); return n && n.offsetParent; })")
             ctx.close()
             return info
@@ -106,9 +110,29 @@ try:
         check('請選擇你是誰' in t3 and '還沒對到佈告欄名單' in t3, '編號對不到佈告欄名單：退回選名字，並說明原因')
         t4 = run('phone', T('001'), 390, 800)['text']
         check('單一登入測試公告' in t4, '手機寬度也能自動登入')
-        check(r1['tabs'] == ['電子佈告欄', '公告管理', '新增公告'], '有權限（admin）：公告專區三個分頁 %s' % r1['tabs'])
+        check(r1['tabs'] == ['公告', '歷史區', '公告管理', '新增公告'], '有權限（admin）：公告專區四個分頁 %s' % r1['tabs'])
         racct = run('acct-tabs', T('001'), user='acct')
-        check(racct['tabs'] == ['電子佈告欄'], '沒權限的帳號只看得到「電子佈告欄」分頁 %s' % racct['tabs'])
+        check(racct['tabs'] == ['公告', '歷史區'], '沒權限的帳號只看得到「公告」「歷史區」分頁 %s' % racct['tabs'])
+        # 2026-10-20：嵌入時沒有藍色標題列、沒有佈告欄自己的公告／歷史區切換，改由管理系統分頁列切換
+        check(r1['chrome'] == [] and '鼎兆元｜電子佈告欄' not in r1['text'].split('\n')[0], '嵌入時藍色標題列與公告／歷史區切換都隱藏：%s' % r1['chrome'])
+        check('已封存的舊公告' not in r1['text'], '「公告」分頁不顯示已封存的公告')
+        def to_hist(page, fr, info):
+            page.click('[data-role="view-nav"] .nav-item:has-text("歷史區")'); page.wait_for_timeout(2500)
+            info['hist'] = fr.locator('#app').inner_text(); info['src1'] = page.locator('[data-role="bulletin-frame"]').get_attribute('src'); info['histUrl'] = page.url
+            info['shot'] = page.screenshot(path=os.path.join(OUT, 'sso_tab-hist.png'))
+            page.reload(); page.wait_for_selector('[data-role="bulletin-frame"]', timeout=10000); page.wait_for_timeout(4000)
+            info['afterReload'] = page.frame_locator('[data-role="bulletin-frame"]').locator('#app').inner_text()
+            info['activeAfterReload'] = page.locator('[data-role="view-nav"] .nav-item.active, [data-role="view-nav"] .nav-item[aria-current]').all_inner_texts()
+            page.click('[data-role="view-nav"] .nav-item:has-text("公告") >> nth=0'); page.wait_for_timeout(2000)
+            info['back'] = page.frame_locator('[data-role="bulletin-frame"]').locator('#app').inner_text()
+        rh = run('tab-switch', T('001'), act=to_hist)
+        check('已封存的舊公告' in rh['hist'] and '單一登入測試公告' not in rh['hist'], '點管理系統的「歷史區」→ 佈告欄切到歷史區')
+        check(rh['src1'].endswith('/?embed=dzy'), '切到歷史區沒有重新載入另一頁（不用重新登入）：%s' % rh['src1'])
+        check(rh['histUrl'].endswith('#/bulletin/hist'), '網址記住歷史區：%s' % rh['histUrl'])
+        check('已封存的舊公告' in rh['afterReload'], '重新整理後停在歷史區')
+        check('單一登入測試公告' in rh['back'] and '已封存的舊公告' not in rh['back'], '再點「公告」切回公告')
+        rph = run('phone-hist', T('001'), 390, 800, view='歷史區')
+        check('已封存的舊公告' in rph['text'] and rph['chrome'] == [], '手機寬度：直接進歷史區、標題列隱藏')
         rm = run('manage', None, view='公告管理', admin_ticket=TA('005'))
         check('單一登入測試公告' in rm['text'] and '公告管理' in rm['text'], '公告管理分頁：管理券登入、列出公告')
         check(rm['visible'] == [], '公告管理分頁沒有分頁切換、沒有同仁名單：%s' % rm['visible'])
