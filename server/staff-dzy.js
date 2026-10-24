@@ -171,7 +171,7 @@ function dzyApply(staff, dirNorm, got, nowIso) {
   // 總監級以上看全部品牌（seeAll）：只在管理系統有回 title 時才動；離職一律清掉。只存 true，不是就刪掉這個欄位
   cur.forEach((S) => {
     const p = S.dzy && dirNorm.byDzy[S.dzy];
-    if (!p || (p.title === null && S.active)) return;
+    if (!p || (p.title === null && p.active)) return;   // 沒有 title（管理系統舊版）：只在管理系統確認離職時清（#45-13）
     const want = S.active && SEE_ALL_TITLES.indexOf(p.title) >= 0;
     if (want === (S.seeAll === true)) return;
     if (want) S.seeAll = true; else delete S.seeAll;

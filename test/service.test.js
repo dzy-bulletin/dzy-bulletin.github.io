@@ -18,7 +18,8 @@ if (process.env.DRIVER === 'server') {
     setClockActive: (empId, on) => post('/__clockActive', { empId, on }),
     setAdminInit: (pass) => post('/__adminInit', { pass }),
     dropPost: (id) => post('/__dropPost', { id }),
-    setSeeAll: (id, on) => post('/__seeAll', { id, on })
+    setSeeAll: (id, on) => post('/__seeAll', { id, on }),
+    addRead: (postId, staffId) => post('/__addRead', { postId, staffId })
   };
 } else {
   M = require('../js/mock.js');
@@ -66,6 +67,7 @@ eq('setPin 亂猜碼 → BAD_CODE（示範資料測試員已有主管產生的�
 }
 eq('setPin ok', [r.ok, r.data.me], [true, { id: 'S-013', name: '測試員甲', unit: 'mala' }]);
 eq('setPin returns board', Array.isArray(r.data.board.posts) && r.data.board.me.id === 'S-013', true);
+eq('setPin 夾帶的 board 只有小辛辣＋全部（精確 id，#45-14）', r.data.board.posts.map(p => p.id).sort(), ['P-20260910-001', 'P-20260920-001', 'P-20260925-001']);
 const tok = r.data.token;
 eq('setPin again', call('setPin', { staffId: 'S-013', pin: '1357' }).code, 'HAS_PIN');
 
@@ -178,6 +180,7 @@ eq('staffAdd dup', C('staffAdd', { atoken: at, name: '新同仁', unit: 'cf' }).
 // LINE 自動登入（2026-10-09）：示範資料 S-001 綁 U-demo-001
 { const r1 = call('lineLogin', { idToken: 'TEST:U-demo-001' });
   eq('lineLogin linked', [r1.ok, r1.data && r1.data.me.id, !!(r1.data && r1.data.board)], [true, 'S-001', true]);
+  eq('lineLogin 夾帶的 board 不含別品牌（#45-14）', r1.data.board.posts.every(p => p.units.indexOf('mala') >= 0) && r1.data.board.posts.length > 0, true);
   eq('lineLogin token reads board', C('board', { token: r1.data.token }).data.me.id, 'S-001');
   eq('lineLogin not linked', C('lineLogin', { idToken: 'TEST:U-nobody' }).code, 'LINE_NOT_LINKED');
   eq('lineLogin bad token', C('lineLogin', { idToken: 'not-a-test-token' }).code, 'LINE_BAD');
@@ -226,6 +229,12 @@ eq('ADMIN_INIT consumed', C('adminLogin', { pass: 'pass5678' }).ok, true);
   eq('seeAll ack cf still rejected', C('ack', { token: hmala, postId: 'P-20260927-001', sig: 'data:image/png;base64,AA' }).code, 'BAD_REQ');
   M.setSeeAll('S-018', false);
   eq('seeAll off → mala only', ids(hmala).includes('P-20260915-001'), false);
+  // #45-12（Codex）：已讀紀錄只回這次看得到的公告（換單位／降職後不再透露看不到的公告編號與簽名時間）
+  M.addRead('P-20260915-001', 'S-018');
+  const rb = C('board', { token: hmala }).data, rh = C('history', { token: hmala }).data;
+  eq('myReads ⊆ 回傳的公告（board）', Object.keys(rb.myReads).every(id => rb.posts.some(p => p.id === id)) && !('P-20260915-001' in rb.myReads), true);
+  eq('myReads ⊆ 回傳的公告（history）', Object.keys(rh.myReads).every(id => rh.posts.some(p => p.id === id)), true);
+  eq('history 精確公告（小辛辣品牌辦公室）', rh.posts.map(p => p.id).sort(), ['P-20260720-001', 'P-20260801-001']);
   eq('me without seeAll has no flag', Object.keys(C('board', { token: hmala }).data.me).sort(), ['id', 'name', 'unit']);
   const ad = C('adminLogin', { pass: 'pass5678' }).data.atoken, posts = C('adminData', { atoken: ad }).data.posts;
   const tgt = id => posts.find(p => p.id === id).targetCount;

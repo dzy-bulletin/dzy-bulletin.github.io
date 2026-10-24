@@ -113,6 +113,7 @@ var DZYB_MOCK = (function () {
     blobOf: function (id) { return BLOBS[id] || null; },
     dropPost: function (id) { var d = load(); d.posts = d.posts.filter(function (p) { return p.id !== id; }); save(); },   // 測試用：模擬 reqId 紀錄指向的公告已不存在
     setAdminInit: function (pw) { var d = load(); d.admin.init = pw; save(); },   // 模擬 Eason 在指令碼屬性填 ADMIN_INIT
+    addRead: function (postId, staffId) { var d = load(); var s = d.staff.filter(function (x) { return x.id === staffId; })[0]; d.reads.push({ postId: postId, staffId: staffId, name: s.name, unit: s.unit, at: '2026-09-01T00:00:00.000Z', sig: '' }); save(); },   // 測試用：模擬換單位前簽過的公告
     setSeeAll: function (id, on) { var d = load(); d.staff.forEach(function (s) { if (s.id === id) { if (on) s.seeAll = true; else delete s.seeAll; } }); save(); },   // 測試用：模擬管理系統同步職稱（總監級以上）
     setClockActive: function (empId, on) { CLOCK.forEach(function (r) { if (r.empId === empId) r.active = on; }); },   // 測試用
     reset: function () { db = seed(); save(); },

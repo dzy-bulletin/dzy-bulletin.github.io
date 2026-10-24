@@ -57,6 +57,8 @@ eq('總監級以上職稱', SD.SEE_ALL_TITLES.slice().sort(), ['ceo', 'chair', '
   eq('第二輪不再變', SD.dzyApply(r.staff, dir, GOT([]), NOW).ch.access, []);
   const off = SD.dzyApply(r.staff, N([T('DZY001', 'dzy-hq', 'hm')].concat([T('DZY002', 'mala-gf', 'sm', [['gf', 'A2']]), T('DZY003', 'mzt-hq', 'odir'), Object.assign(T('DZY004', 'ck', 'rdd', [['cf', 'C4']]), { active: false })])), GOT([]), NOW);
   eq('品牌辦公室總監 odir → seeAll；離職的人清掉 seeAll', [by(off, 'S-003').seeAll, by(off, 'S-004').seeAll, by(off, 'S-004').active], [true, undefined, false]);
+  const man = SD.dzyApply([S0('S-005', 'DZY005', 'hq-dzy', { dzy: 'DZY005', seeAll: true, active: false })], N([T('DZY005', 'dzy-hq', undefined)]), GOT([]), NOW);
+  eq('沒有 title 欄位＋佈告欄手動刪除、管理系統仍在職 → seeAll 不動（#45-13）', by(man, 'S-005').seeAll, true);
   const nw = SD.dzyApply([], N([T('DZY009', 'dzy-hq', 'ceo')]), GOT([]), NOW);
   eq('新人是執行長 → 新增時就有 seeAll', nw.staff[0].seeAll, true);
 }

@@ -366,6 +366,7 @@ function makeApp(cfg) {
     if (pathname === '/__seed') { seed(body.demo ? require(path.join(ROOT, 'js/demo-data.js'))(L) : body); return send(res, 200, { ok: true }); }
     if (pathname === '/__clock') { clockOffsetMs = (Number(body.offDays) || 0) * 86400e3; return send(res, 200, { ok: true, data: { today: clock.today() } }); }
     if (pathname === '/__clockActive') { const rows = bridge.getClock().rows; rows.forEach((r) => { if (r.empId === body.empId) r.active = !!body.on; }); bridge.setClock(rows); return send(res, 200, { ok: true }); }
+    if (pathname === '/__addRead') { const s = store.getStaff().find((x) => x.id === String(body.staffId)); store.addRead({ postId: String(body.postId), staffId: s.id, name: s.name, unit: s.unit, at: '2026-09-01T00:00:00.000Z', sig: 'data:image/png;base64,AA' }); return send(res, 200, { ok: true }); }
     if (pathname === '/__seeAll') { const s = store.getStaff().find((x) => x.id === String(body.id)); if (s) { if (body.on) s.seeAll = true; else delete s.seeAll; store.saveStaff(s); } return send(res, 200, { ok: true }); }
     if (pathname === '/__adminInit') { fs.writeFileSync(path.join(DATA_DIR, 'ADMIN_INIT.txt'), String(body.pass)); return send(res, 200, { ok: true }); }
     if (pathname === '/__blob') return send(res, 200, { ok: true, data: bridge.blobOf(url.searchParams.get('id')) });

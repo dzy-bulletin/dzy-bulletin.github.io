@@ -316,7 +316,7 @@ var Staff = (function () {
   function saveLogin(d) {
     UI.store.set('token', d.token); UI.store.set('me', JSON.stringify(d.me));
     if (d.needPin) UI.store.set('needPin', '1'); else UI.store.del('needPin');
-    if (d.board) UI.store.set('board', JSON.stringify({ id: d.me.id, b: d.board }));
+    if (d.board) cacheBoard(d.board);
   }
   function enter(d) {
     saveLogin(d); patchRoster(d.me.id, { hasPin: true, locked: false });
@@ -327,7 +327,11 @@ var Staff = (function () {
     if (v.tab === 'hist') { renderMe(); loadHistory(); }
   }
   // 上次的公告存在這支手機：再次打開時先顯示，背景更新（Apps Script 回應常要數秒到數十秒）
-  function cacheBoard(b) { UI.store.set('board', JSON.stringify({ id: b.me.id, b: b })); }
+  // 只把自己品牌看得到的公告存進手機（#45-15）：總監級的跨品牌公告只放記憶體，每次開頁向後端拿；降職後離線也不會再顯示別品牌
+  function cacheBoard(b) {
+    var own = Object.assign({}, b, { posts: b.posts.filter(function (p) { return L.canSee(b.me.unit, p, false); }) });
+    UI.store.set('board', JSON.stringify({ id: b.me.id, b: own }));
+  }
   function cachedBoard() { try { var c = JSON.parse(UI.store.get('board')); var m = me(); return c && m && c.id === m.id ? c.b : null; } catch (e) { return null; } }
 
   /* ---------- 公告與歷史 ---------- */
