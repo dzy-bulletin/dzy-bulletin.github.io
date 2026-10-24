@@ -47,6 +47,7 @@ eq('總監級以上職稱', SD.SEE_ALL_TITLES.slice().sort(), ['ceo', 'chair', '
 { const T = (dzy, unit, title, clocks) => Object.assign(P(dzy, dzy, unit, true, clocks), title === undefined ? {} : { title });
   const staff = [S0('S-001', 'DZY001', 'hq-dzy', { dzy: 'DZY001' }), S0('S-002', 'DZY002', 'mala', { dzy: 'DZY002', seeAll: true }),
     S0('S-003', 'DZY003', 'hq-mzt', { dzy: 'DZY003', seeAll: true }), S0('S-004', 'DZY004', 'cf', { dzy: 'DZY004' })];
+  eq('職稱大小寫、空白不影響（#45-5）', SD.dzyApply([S0('S-001', 'x', 'hq-dzy', { dzy: 'DZY001' })], N([T('DZY001', 'dzy-hq', ' HM ')]), GOT([]), NOW).staff[0].seeAll, true);
   const dir = N([T('DZY001', 'dzy-hq', 'hm'), T('DZY002', 'mala-gf', 'sm', [['gf', 'A2']]), T('DZY003', 'mzt-hq', undefined), T('DZY004', 'ck', 'rdd', [['cf', 'C4']])]);
   eq('normalizeDirectory 帶 title；缺欄位＝null', dir.people.map((p) => p.title), ['hm', 'sm', null, 'rdd']);
   const r = SD.dzyApply(staff, dir, GOT([]), NOW);
@@ -454,7 +455,7 @@ const bridgeOf = (got, fail) => { const b = { calls: [] }; b.call = async (op, p
       eq('G2 搬家：同樣中止（丟 DIR_DUP）', e, 'DIR_DUP'); setRows(dirOk); }
 
     // ---- G3：姓名不一致不自動認領；人工認領清憑證 ----
-    { const stf = [S0('S-001', '舊員工', 'mala', { src: 'gf:A1', pinHash: 'OLDPH', salt: 'SA', pinVer: 4, lineHash: H1 })];
+    { const stf = [S0('S-001', '舊員工', 'mala', { src: 'gf:A1', pinHash: 'OLDPH', salt: 'SA', pinVer: 4, lineHash: H1, seeAll: true })];
       setRows([P('DZY001', '新員工', 'mala-gf', true, [['gf', 'A1']])]);
       const d = fresh(stf);
       let r = await SD.runDzySync({ dir: d, bridge: bridgeOf(GOT([R('gf', 'A1', 'x', { lineHash: H3 })], ['gf'])), fetchDir: fetch3 });
@@ -462,6 +463,7 @@ const bridgeOf = (got, fail) => { const b = { calls: [] }; b.call = async (op, p
       eq('G3 同步：同一打卡編號、姓名不同→不自動認領、也不新增，列入人工清單', [r.ok, r.manual, r.manualIds, a1.length, a1[0].dzy || '', a1[0].pinHash], [true, 1, ['S-001'], 1, '', 'OLDPH']);
       r = await SD.runClaim({ dir: d, fetchDir: fetch3, id: 'S-001', dzy: 'DZY001' });
       const a2 = dump(d)[0];
+      eq('G3 人工認領：也清掉舊帳號的 seeAll（不繼承前一位的總監可見，#45-2）', a2.seeAll, undefined);
       eq('G3 人工認領：清除 pinHash／salt／lineHash 並提升 pinVer', [r.ok, a2.dzy, a2.pinHash, a2.salt, a2.lineHash, a2.pinVer], [true, 'DZY001', '', '', '', 5]);
       eq('G3 認領：不存在的 DZY／已被使用的 DZY／已掛的 S 都拒絕', [(await SD.runClaim({ dir: d, fetchDir: fetch3, id: 'S-001', dzy: 'DZY001' })).ok, (await SD.runClaim({ dir: d, fetchDir: fetch3, id: 'S-009', dzy: 'DZY001' })).ok, (await SD.runClaim({ dir: d, fetchDir: fetch3, id: 'S-001', dzy: 'DZY777' })).ok], [false, false, false]);
       // 搬家用 --allow-name-diff 認領姓名不同者，也清憑證
@@ -568,7 +570,7 @@ const bridgeOf = (got, fail) => { const b = { calls: [] }; b.call = async (op, p
       // 切換後發生的事：改名、換單位、新人、使用者改了密碼
       setRows([P('DZY001', '改過名', 'mzt-gf', true, [['mztgf', 'G1']]), P('DZY002', '測試乙', 'mala-gf', false, [['gf', 'A2']]), P('DZY003', '新人', 'mala-gf', true, [['gf', 'A3']])]);
       await SD.runDzySync({ dir: d, bridge: bridgeOf(GOT([], ['gf'])), fetchDir: fetch3 });
-      const mid = makeSqliteStore(d); const s1 = mid.getStaff().find((x) => x.id === 'S-001'); s1.pinHash = 'NEWPH'; s1.pinVer = 3; mid.saveStaff(s1); mid.close();
+      const mid = makeSqliteStore(d); const s1 = mid.getStaff().find((x) => x.id === 'S-001'); s1.pinHash = 'NEWPH'; s1.pinVer = 3; s1.seeAll = true; mid.saveStaff(s1); const s3 = mid.getStaff().find((x) => x.id === 'S-003'); s3.seeAll = true; mid.saveStaff(s3); mid.close();
       eq('rollback 前：切換後的狀態（改名、換單位、S-002 停用、新人 S-003）', [dump(d).map((s) => s.name + '|' + s.unit + '|' + s.active).join(','), dump(d).length], ['改過名|mzt|true,測試乙|mala|false,新人|mala|true', 3]);
       // 再搬一次不會覆蓋最早的快照
       r = await SD.runMigrate({ dir: d, fetchDir: fetch3, apply: true });
@@ -577,6 +579,7 @@ const bridgeOf = (got, fail) => { const b = { calls: [] }; b.call = async (op, p
       const af = dump(d);
       eq('G12 rollback：恢復搬家前的姓名／單位／在職／src', [rb.ok, rb.snapshot === snap, af[0].name, af[0].unit, af[0].src, af[1].active], [true, true, '測試甲', 'mala', 'gf:A1', true]);
       eq('G12 rollback：保留現有密碼（不救回舊密碼）、快照之後新增的同仁保留', [af[0].pinHash, af[2].id, af.length], ['NEWPH', 'S-003', 3]);
+      eq('G12 rollback：回打卡模式後沒有同步會收回 seeAll → 全部清掉（含快照之後新增者，#45-2）', af.map((s) => s.seeAll), [undefined, undefined, undefined]);
       eq('G12 rollback：全部同仁 pinVer+1（含快照之後新增者）', af.map((s) => s.pinVer), [4, 1, 1]);
       eq('G12 rollback：兩個旗標都清掉→STAFF_SOURCE=dzy 也是 clock', [kvOf(d, SD.MIGRATED_KEY), kvOf(d, SD.SWITCH_KEY), SD.effectiveSource({ STAFF_SOURCE: 'dzy' }, (k) => kvOf(d, k))], [null, null, 'clock']);
       eq('G12 rollback：沒有快照→拒絕、什麼都不動', (() => { const e = tmp(); seed(e, pre, true); const x = SD.runRollback({ dir: e }); return [x.ok, same(e, pre)]; })(), [false, true]);

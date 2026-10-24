@@ -349,7 +349,8 @@ var Staff = (function () {
     API.staff('history').then(function (r) {
       v.loading = false;
       if (!r.ok) { if (r.code !== 'AUTH') { v.error = r.message; render(); } return; }
-      v.hist = r.data; render();
+      v.hist = r.data; if (r.data.me) UI.store.set('me', JSON.stringify(r.data.me));   // 歷史區也更新身分（seeAll 變了分頁跟著變，#45-4）
+      render();
     });
   }
   // 依目前分頁載入（公告或歷史區）

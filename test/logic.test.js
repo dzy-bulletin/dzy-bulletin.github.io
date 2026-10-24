@@ -118,6 +118,11 @@ eq('canSee seeAll cf', L.canSee('mala', CF, true), true);
 eq('canSee seeAll hq-dzy mala', L.canSee('hq-dzy', MALA, true), true);
 eq('canSee no units', L.canSee('mala', { units: [] }), false);
 eq('canSee unknown unit', L.canSee('xx', ALLP), false);
+// 不變式（#45-3）：要簽的公告一定看得到（ack 的 canSee 守門才有意義）
+{ const combos = [[], ['mzt'], ['mala'], ['cf'], ['mzt', 'mala'], ['mzt', 'cf'], ['mala', 'cf'], ['mzt', 'mala', 'cf']];
+  const bad = [];
+  ['mzt', 'mala', 'cf', 'hq-dzy', 'hq-mzt', 'hq-mala'].forEach(u => [false, true].forEach(sa => combos.forEach(c => { if (L.mustSign(u, { units: c }) && !L.canSee(u, { units: c }, sa)) bad.push(u + sa + c); })));
+  eq('mustSign ⇒ canSee（所有單位 × seeAll × 單位組合）', bad, []); }
 eq('mustSign store own', L.mustSign('mala', MALA), true);
 eq('mustSign store other', L.mustSign('mala', CF), false);
 eq('mustSign hq-dzy all', L.mustSign('hq-dzy', ALLP), true);

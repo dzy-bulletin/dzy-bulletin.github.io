@@ -66,7 +66,7 @@ function normalizeDirectory(data, meta) {
     const clocks = (Array.isArray(r.clocks) ? r.clocks : []).map((c) => ({ store: String(c && c.store_code || '').trim().toLowerCase(), empId: String(c && c.emp_id || '').trim(), role: String(c && c.role || '').trim() }))
       .filter((c) => c.store && c.empId);
     // title：管理系統舊版沒有這一欄 → null（dzyApply 不動 seeAll）
-    const title = Object.prototype.hasOwnProperty.call(r, 'title') ? String(r.title == null ? '' : r.title).trim() : null;
+    const title = Object.prototype.hasOwnProperty.call(r, 'title') ? String(r.title == null ? '' : r.title).trim().toLowerCase() : null;
     people.push({ dzy, name, unit: String(r.unit || '').trim(), title, active: r.active === true, clocks });
   });
   if (dupNo.length) throw bad(`管理系統名單有重複的 emp_no（${dupNo.length} 個：${dupNo.slice(0, 10).join('、')}），整輪中止`, 'DIR_DUP');   // G2：不取第一筆
@@ -411,7 +411,8 @@ async function runMigrate(o) {
   } finally { try { db.close(); } catch (e) {} }
 }
 // G3：人工確認認領時清掉舊帳號的憑證：密碼、LINE 綁定都清，pinVer+1 讓已登入的手機失效
-function clearCredentials(s) { s.pinHash = ''; s.salt = ''; s.fail = 0; s.lineHash = ''; s.pinVer = (Number(s.pinVer) || 0) + 1; }
+// seeAll 一起清（#45-2）：換人認領不繼承前一位的總監可見，下一輪同步依新的人的職稱再給
+function clearCredentials(s) { s.pinHash = ''; s.salt = ''; s.fail = 0; s.lineHash = ''; delete s.seeAll; s.pinVer = (Number(s.pinVer) || 0) + 1; }
 // 人工認領：S-xxx 與 DZY 編號由人確認是同一人（姓名不一致時 dzyApply 不會自動認領）。o: { dir, fetchDir, id, dzy }
 async function runClaim(o) {
   const dirN = await o.fetchDir();
@@ -452,6 +453,7 @@ function runRollback(o) {
         let n = c;
         if (byId[c.id]) { n = Object.assign({}, byId[c.id], { pinHash: c.pinHash, salt: c.salt, fail: c.fail, pinVer: c.pinVer }); delete n.offBy; restored++; }
         n.pinVer = (Number(n.pinVer) || 0) + 1;
+        delete n.seeAll;   // 回打卡模式後沒有任何同步會收回 seeAll → 一律清掉（#45-2）；總監回退期只看自己單位
         up.run(JSON.stringify(n), n.id);
       });
       db.prepare('DELETE FROM kv WHERE k IN (?, ?)').run(MIGRATED_KEY, SWITCH_KEY);

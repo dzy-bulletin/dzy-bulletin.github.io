@@ -221,6 +221,7 @@ eq('ADMIN_INIT consumed', C('adminLogin', { pass: 'pass5678' }).ok, true);
   const b18 = C('board', { token: hmala }).data;
   eq('seeAll me flag', b18.me.seeAll, true);
   eq('seeAll sees mzt+cf', b18.posts.some(p => p.id === 'P-20260915-001') && b18.posts.some(p => p.id === 'P-20260927-001'), true);
+  eq('history 也回 me（含 seeAll）', C('history', { token: hmala }).data.me.seeAll, true);
   eq('seeAll history incl cf', C('history', { token: hmala }).data.posts.some(p => p.id === 'P-20260820-001'), true);
   eq('seeAll ack cf still rejected', C('ack', { token: hmala, postId: 'P-20260927-001', sig: 'data:image/png;base64,AA' }).code, 'BAD_REQ');
   M.setSeeAll('S-018', false);

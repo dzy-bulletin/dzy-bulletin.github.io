@@ -204,7 +204,7 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify, opts) 
       var s = staffOf(q), td = clock.today();
       var posts = store.getPosts().filter(function (p) { return L.status(p, td).state === 'off' && sees(s, p); })
         .sort(function (a, b) { return L.sortHistory(a, b, td); }).map(function (p) { return withStatus(p, td); });
-      return { today: td, posts: posts, myReads: myReadAt(s.id) };
+      return { today: td, me: me(s), posts: posts, myReads: myReadAt(s.id) };
     },
     ack: function (q) {
       var s = staffOf(q), p = findPost(q.postId);
