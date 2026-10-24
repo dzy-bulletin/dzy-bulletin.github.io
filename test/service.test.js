@@ -17,7 +17,8 @@ if (process.env.DRIVER === 'server') {
     blobOf: (id) => JSON.parse(execFileSync('curl', ['-s', S + '/__blob?id=' + encodeURIComponent(id)]).toString()).data,
     setClockActive: (empId, on) => post('/__clockActive', { empId, on }),
     setAdminInit: (pass) => post('/__adminInit', { pass }),
-    dropPost: (id) => post('/__dropPost', { id })
+    dropPost: (id) => post('/__dropPost', { id }),
+    setSeeAll: (id, on) => post('/__seeAll', { id, on })
   };
 } else {
   M = require('../js/mock.js');
@@ -87,7 +88,7 @@ eq('ack archived', call('ack', { token: tok, postId: 'P-20260720-001', sig: 'dat
 // history
 r = call('history', { token: tok });
 eq('history only off', r.data.posts.every(p => p.status.state === 'off'), true);
-eq('history order', r.data.posts.map(p => p.status.offDate), ['2026-09-05', '2026-08-31', '2026-08-15', '2026-07-20']);
+eq('history order（小辛辣只看得到小辛辣＋全部）', r.data.posts.map(p => p.status.offDate), ['2026-08-31', '2026-08-15']);
 
 // login：連錯 3 次鎖
 eq('login bad1', [call('login', { staffId: 'S-013', pin: '1111' }).code, C('login', { staffId: 'S-013', pin: '1111' }).left], ['BAD_PIN', 1]);
@@ -204,13 +205,27 @@ eq('ADMIN_INIT consumed', C('adminLogin', { pass: 'pass5678' }).ok, true);
 { const tk = id => { const code = C('staffResetPin', { atoken: C('adminLogin', { pass: 'pass5678' }).data.atoken, staffId: id }).data.code; return C('setPin', { staffId: id, pin: '2580', code }).data.token; };
   const dzy = tk('S-016'), hmzt = tk('S-017'), hmala = tk('S-018');
   const ids = t => C('board', { token: t }).data.posts.map(p => p.id);
-  eq('hq-dzy sees cf post', ids(dzy).includes('P-20260927-001'), true);
-  eq('hq-mzt sees all posts incl cf', ids(hmzt).includes('P-20260927-001') && ids(hmzt).includes('P-20260920-001'), true);
-  eq('hq-mala sees mzt post', ids(hmala).includes('P-20260915-001'), true);
-  eq('hq-mzt history not filtered', C('history', { token: hmzt }).data.posts.some(p => p.units.indexOf('mzt') < 0), true);
-  eq('hq-dzy ack partial rejected', C('ack', { token: dzy, postId: 'P-20260927-001', sig: 'data:image/png;base64,AA' }).code, 'BAD_REQ');
+  // 2026-10-25 v0.8.0 公告依品牌可見（docs/brand-visibility.md）：後端就不回看不到的公告
+  eq('hq-dzy sees mzt post', ids(dzy).includes('P-20260915-001'), true);
+  eq('hq-dzy sees all post', ids(dzy).includes('P-20260910-001'), true);
+  eq('hq-dzy not cf/mala post', ids(dzy).includes('P-20260927-001') || ids(dzy).includes('P-20260920-001'), false);
+  eq('hq-mzt sees mzt only', [ids(hmzt).includes('P-20260915-001'), ids(hmzt).includes('P-20260920-001'), ids(hmzt).includes('P-20260927-001')], [true, false, false]);
+  eq('hq-mala sees mala only', [ids(hmala).includes('P-20260920-001'), ids(hmala).includes('P-20260915-001')], [true, false]);
+  eq('hq-mzt history filtered', C('history', { token: hmzt }).data.posts.every(p => p.units.indexOf('mzt') >= 0), true);
+  eq('hq-dzy ack cf rejected', C('ack', { token: dzy, postId: 'P-20260927-001', sig: 'data:image/png;base64,AA' }).code, 'BAD_REQ');
+  eq('hq-dzy ack mzt-only rejected (sees, not sign)', C('ack', { token: dzy, postId: 'P-20260915-001', sig: 'data:image/png;base64,AA' }).code, 'BAD_REQ');
   eq('hq-dzy ack all ok', C('ack', { token: dzy, postId: 'P-20260910-001', sig: 'data:image/png;base64,AA' }).ok, true);
   eq('hq-mala ack mzt rejected', C('ack', { token: hmala, postId: 'P-20260915-001', sig: 'data:image/png;base64,AA' }).code, 'BAD_REQ');
+  // 總監級以上（seeAll）：三區都看，簽名仍依單位
+  M.setSeeAll('S-018', true);
+  const b18 = C('board', { token: hmala }).data;
+  eq('seeAll me flag', b18.me.seeAll, true);
+  eq('seeAll sees mzt+cf', b18.posts.some(p => p.id === 'P-20260915-001') && b18.posts.some(p => p.id === 'P-20260927-001'), true);
+  eq('seeAll history incl cf', C('history', { token: hmala }).data.posts.some(p => p.id === 'P-20260820-001'), true);
+  eq('seeAll ack cf still rejected', C('ack', { token: hmala, postId: 'P-20260927-001', sig: 'data:image/png;base64,AA' }).code, 'BAD_REQ');
+  M.setSeeAll('S-018', false);
+  eq('seeAll off → mala only', ids(hmala).includes('P-20260915-001'), false);
+  eq('me without seeAll has no flag', Object.keys(C('board', { token: hmala }).data.me).sort(), ['id', 'name', 'unit']);
   const ad = C('adminLogin', { pass: 'pass5678' }).data.atoken, posts = C('adminData', { atoken: ad }).data.posts;
   const tgt = id => posts.find(p => p.id === id).targetCount;
   eq('target all includes hq-dzy/hq-mzt/hq-mala', tgt('P-20260910-001'), 18);   // 門市在職 15（S-001 已刪、S-019 新增）＋總部 3

@@ -56,6 +56,10 @@ def make(seed, today):
             n += 1
             staff.append({'id': 'S-%03d' % n, 'name': name(), 'unit': u, 'pin': rand_pin(rng), 'fail': 0,
                           'store': rng.choice(STORES[u] + [''] if rng.random() < 0.15 else STORES[u]) if u in STORES else ''})
+    # 總監級以上（2026-10-25）：約 2/3 的資料讓總部三組其中一組的第一位是總監（看全部品牌）
+    if rng.random() < 0.67:
+        u = rng.choice(['hq-dzy', 'hq-mzt', 'hq-mala'])
+        next(x for x in staff if x['unit'] == u)['seeAll'] = True
     # 分層：約 1/5 沒設密碼、1 人被鎖定（連錯 3 次）
     firsts = {u: next(x['id'] for x in staff if x['unit'] == u) for u in STAFF_UNITS}   # 每個單位第一位保證有密碼（登入流程要用）
     for s in rng.sample([x for x in staff if x['id'] not in firsts.values()], max(1, len(staff) // 5)):
@@ -144,8 +148,11 @@ def status(p, td):  # C10 → (state, offDate, month)
 def is_all(units): return all(u in units for u in UNITS)
 
 
-def can_see(staff_unit, p):  # C15（2026-09-29 改：所有人都看得到全部公告）
-    return True
+VIEW_OF = {'mzt': 'mzt', 'mala': 'mala', 'cf': 'cf', 'hq-mzt': 'mzt', 'hq-mala': 'mala', 'hq-dzy': 'mzt'}
+
+
+def can_see(staff_unit, p, see_all=False):  # C15（2026-10-25 v0.8.0：只看自己品牌；總部鼎兆元＝墨竹亭；總監級以上 see_all 看全部）
+    return any(u in view_tabs(staff_unit, see_all) for u in p['units'])
 
 
 def must_sign(staff_unit, p):  # C15
@@ -153,8 +160,9 @@ def must_sign(staff_unit, p):  # C15
     return HQ_BRAND.get(staff_unit, staff_unit) in p['units']
 
 
-def view_tabs(staff_unit):
-    return UNITS[:]
+def view_tabs(staff_unit, see_all=False):
+    if see_all is True: return UNITS[:]
+    return [VIEW_OF[staff_unit]] if staff_unit in VIEW_OF else []
 
 
 def home_tab(staff_unit):
@@ -197,15 +205,15 @@ class World:
 
     def read_count(self, p): return sum(1 for s in self.targets(p) if (p['id'], s['id']) in self.reads)
 
-    def board(self, staff_unit, td):
-        return [p for p in self.posts.values() if status(p, td)[0] == 'on' and can_see(staff_unit, p)]
+    def board(self, staff_unit, td, see_all=False):
+        return [p for p in self.posts.values() if status(p, td)[0] == 'on' and can_see(staff_unit, p, see_all)]
 
-    def history(self, staff_unit, td):
-        return [p for p in self.posts.values() if status(p, td)[0] == 'off' and can_see(staff_unit, p)]
+    def history(self, staff_unit, td, see_all=False):
+        return [p for p in self.posts.values() if status(p, td)[0] == 'off' and can_see(staff_unit, p, see_all)]
 
     def unread(self, sid, td):
         s = self.staff[sid]; home = home_tab(s['unit'])
-        return [p for p in self.board(s['unit'], td) if home in p['units'] and must_sign(s['unit'], p) and (p['id'], sid) not in self.reads]
+        return [p for p in self.board(s['unit'], td, s.get('seeAll') is True) if home in p['units'] and must_sign(s['unit'], p) and (p['id'], sid) not in self.reads]
 
     def receipt_rows(self, p):
         rows = [{'name': s['name'], 'unit': s['unit'], 'read': (p['id'], s['id']) in self.reads, 'active': True, 'inTarget': True} for s in self.targets(p)]

@@ -55,9 +55,17 @@ var DZYB = (function () {
   }
   function isAllUnits(list) { return normUnits(list).length === UNIT_IDS.length; }
 
-  // C15 看得到哪些分頁：所有人三個分頁都能看（2026-09-29 Eason 改：總部墨竹亭／小辛辣也看得到全部，只簽自己品牌）
-  function viewTabs(staffUnit) { return UNIT_IDS.slice(); }
-  function canSee(staffUnit, p) { return true; }
+  // C15 看得到哪些分頁（2026-10-25 v0.8.0 Eason 改，docs/brand-visibility.md）：只看自己品牌；總部鼎兆元部門同仁＝墨竹亭（目前只為墨竹亭服務）；
+  // 總監級以上（seeAll，由管理系統職稱同步）三個分頁都看。後端 board／history／ack 用 canSee 擋，不是只藏分頁
+  var VIEW_OF = { mzt: 'mzt', mala: 'mala', cf: 'cf', 'hq-mzt': 'mzt', 'hq-mala': 'mala', 'hq-dzy': 'mzt' };
+  function viewTabs(staffUnit, seeAll) {
+    if (seeAll === true) return UNIT_IDS.slice();
+    return VIEW_OF.hasOwnProperty(staffUnit) ? [VIEW_OF[staffUnit]] : [];
+  }
+  function canSee(staffUnit, p, seeAll) {
+    var tabs = viewTabs(staffUnit, seeAll);
+    return normUnits(p && p.units).some(function (u) { return tabs.indexOf(u) >= 0; });
+  }
   // C15 要不要簽：門市＝公告含自己單位；總部墨竹亭／小辛辣＝公告含該品牌；總部鼎兆元＝只簽「全部」
   function mustSign(staffUnit, p) {
     if (staffUnit === 'hq-dzy') return isAllUnits(p.units);

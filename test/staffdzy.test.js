@@ -42,6 +42,24 @@ eq('對照：管理系統六家店 gf／mztjs／mztgf／mztlzl／hq／cf 都有�
 eq('對照：clockKeyOfSrc', [SD.clockKeyOfSrc('js:J1'), SD.clockKeyOfSrc('mgf:G01'), SD.clockKeyOfSrc('xx:1'), SD.clockKeyOfSrc(''), SD.clockKeyOfSrc('gf:')], ['mztjs:J1', 'mztgf:G01', '', '', '']);
 eq('對照：單位代碼', Object.keys(SD.UNIT_OF_DZY).sort(), ['ck', 'dzy-hq', 'mala-gf', 'mala-hq', 'mzt-gf', 'mzt-hq', 'mzt-js', 'mzt-lzl']);
 
+// ---------- 0b. 職稱 → 總監級以上看全部品牌（2026-10-25 v0.8.0，docs/brand-visibility.md）----------
+eq('總監級以上職稱', SD.SEE_ALL_TITLES.slice().sort(), ['ceo', 'chair', 'gm', 'hm', 'odir', 'rdd']);
+{ const T = (dzy, unit, title, clocks) => Object.assign(P(dzy, dzy, unit, true, clocks), title === undefined ? {} : { title });
+  const staff = [S0('S-001', 'DZY001', 'hq-dzy', { dzy: 'DZY001' }), S0('S-002', 'DZY002', 'mala', { dzy: 'DZY002', seeAll: true }),
+    S0('S-003', 'DZY003', 'hq-mzt', { dzy: 'DZY003', seeAll: true }), S0('S-004', 'DZY004', 'cf', { dzy: 'DZY004' })];
+  const dir = N([T('DZY001', 'dzy-hq', 'hm'), T('DZY002', 'mala-gf', 'sm', [['gf', 'A2']]), T('DZY003', 'mzt-hq', undefined), T('DZY004', 'ck', 'rdd', [['cf', 'C4']])]);
+  eq('normalizeDirectory 帶 title；缺欄位＝null', dir.people.map((p) => p.title), ['hm', 'sm', null, 'rdd']);
+  const r = SD.dzyApply(staff, dir, GOT([]), NOW);
+  eq('總監→seeAll；店長→拿掉；沒有 title 欄位（管理系統舊版）→不動', ['S-001', 'S-002', 'S-003', 'S-004'].map((id) => by(r, id).seeAll), [true, undefined, true, true]);
+  eq('seeAll 變動列在 ch.access', r.ch.access.sort(), ['S-001', 'S-002', 'S-004']);
+  eq('seeAll 變動算進 changed', ['S-001', 'S-002', 'S-004'].every((id) => r.changed.indexOf(id) >= 0), true);
+  eq('第二輪不再變', SD.dzyApply(r.staff, dir, GOT([]), NOW).ch.access, []);
+  const off = SD.dzyApply(r.staff, N([T('DZY001', 'dzy-hq', 'hm')].concat([T('DZY002', 'mala-gf', 'sm', [['gf', 'A2']]), T('DZY003', 'mzt-hq', 'odir'), Object.assign(T('DZY004', 'ck', 'rdd', [['cf', 'C4']]), { active: false })])), GOT([]), NOW);
+  eq('品牌辦公室總監 odir → seeAll；離職的人清掉 seeAll', [by(off, 'S-003').seeAll, by(off, 'S-004').seeAll, by(off, 'S-004').active], [true, undefined, false]);
+  const nw = SD.dzyApply([], N([T('DZY009', 'dzy-hq', 'ceo')]), GOT([]), NOW);
+  eq('新人是執行長 → 新增時就有 seeAll', nw.staff[0].seeAll, true);
+}
+
 // ---------- 1. normalizeDirectory ----------
 { const d = N([P('DZY001', '測試甲', 'mala-gf', true, [['gf', 'A1']]), P('DZY002', '測試乙', 'mala-gf', true, [['gf', 'A1']]), P('DZY003', '', 'mala-gf', true), { emp_no: '', name: 'x' },
     P('DZY004', '測試丁', 'ck', true, [['cf', 'C1'], ['', 'x']])]);

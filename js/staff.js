@@ -360,15 +360,15 @@ var Staff = (function () {
   function render() {
     var app = $('app'), m = me();
     if (!m) { app.innerHTML = ''; return; }
-    var tabs = L.viewTabs(m.unit), home = L.homeTab(m.unit);
-    if (tabs.indexOf(v.unit) < 0) v.unit = home;
+    var tabs = L.viewTabs(m.unit, m.seeAll === true), home = L.homeTab(m.unit);   // 2026-10-25 只看自己品牌；總監級以上三區
+    if (tabs.indexOf(v.unit) < 0) v.unit = tabs.indexOf(home) >= 0 ? home : (tabs[0] || home);
     var myR = (v.board && v.board.myReads) || {};
     var unread = function (u) {
       return v.board ? v.board.posts.filter(function (p) { return p.units.indexOf(u) >= 0 && iTarget(p) && !myR[p.id]; }).length : 0;
     };
     var h = '<div class="tabs"><button data-tab="board" class="' + (v.tab === 'board' ? 'on' : '') + '">📌 公告</button>' +
       '<button data-tab="hist" class="' + (v.tab === 'hist' ? 'on' : '') + '">🗂 歷史區</button></div>' +
-      '<div class="seg">' + L.UNITS.filter(function (u) { return tabs.indexOf(u.id) >= 0; }).map(function (u) {
+      '<div class="seg"' + (tabs.length > 1 ? '' : ' hidden') + '>' + L.UNITS.filter(function (u) { return tabs.indexOf(u.id) >= 0; }).map(function (u) {   // 只有一區就不顯示品牌分頁列
         var n = (v.tab === 'board' && u.id === home) ? unread(u.id) : 0;
         return '<button data-unit="' + u.id + '" class="' + (v.unit === u.id ? 'on' : '') + '">' + u.name + (n ? '<span class="n">' + n + '</span>' : '') + '</button>';
       }).join('') + '</div>';
