@@ -316,7 +316,7 @@ var Staff = (function () {
   function saveLogin(d) {
     UI.store.set('token', d.token); UI.store.set('me', JSON.stringify(d.me));
     if (d.needPin) UI.store.set('needPin', '1'); else UI.store.del('needPin');
-    if (d.board) UI.store.set('board', JSON.stringify({ id: d.me.id, b: d.board }));
+    if (d.board) cacheBoard(d.board);
   }
   function enter(d) {
     saveLogin(d); patchRoster(d.me.id, { hasPin: true, locked: false });
@@ -327,7 +327,11 @@ var Staff = (function () {
     if (v.tab === 'hist') { renderMe(); loadHistory(); }
   }
   // 上次的公告存在這支手機：再次打開時先顯示，背景更新（Apps Script 回應常要數秒到數十秒）
-  function cacheBoard(b) { UI.store.set('board', JSON.stringify({ id: b.me.id, b: b })); }
+  // 只把自己品牌看得到的公告存進手機（#45-15）：總監級的跨品牌公告只放記憶體，每次開頁向後端拿；降職後離線也不會再顯示別品牌
+  function cacheBoard(b) {
+    var own = Object.assign({}, b, { posts: b.posts.filter(function (p) { return L.canSee(b.me.unit, p, false); }) });
+    UI.store.set('board', JSON.stringify({ id: b.me.id, b: own }));
+  }
   function cachedBoard() { try { var c = JSON.parse(UI.store.get('board')); var m = me(); return c && m && c.id === m.id ? c.b : null; } catch (e) { return null; } }
 
   /* ---------- 公告與歷史 ---------- */
@@ -349,7 +353,8 @@ var Staff = (function () {
     API.staff('history').then(function (r) {
       v.loading = false;
       if (!r.ok) { if (r.code !== 'AUTH') { v.error = r.message; render(); } return; }
-      v.hist = r.data; render();
+      v.hist = r.data; if (r.data.me) UI.store.set('me', JSON.stringify(r.data.me));   // 歷史區也更新身分（seeAll 變了分頁跟著變，#45-4）
+      render();
     });
   }
   // 依目前分頁載入（公告或歷史區）
@@ -360,15 +365,15 @@ var Staff = (function () {
   function render() {
     var app = $('app'), m = me();
     if (!m) { app.innerHTML = ''; return; }
-    var tabs = L.viewTabs(m.unit), home = L.homeTab(m.unit);
-    if (tabs.indexOf(v.unit) < 0) v.unit = home;
+    var tabs = L.viewTabs(m.unit, m.seeAll === true), home = L.homeTab(m.unit);   // 2026-10-25 只看自己品牌；總監級以上三區
+    if (tabs.indexOf(v.unit) < 0) v.unit = tabs.indexOf(home) >= 0 ? home : (tabs[0] || home);
     var myR = (v.board && v.board.myReads) || {};
     var unread = function (u) {
       return v.board ? v.board.posts.filter(function (p) { return p.units.indexOf(u) >= 0 && iTarget(p) && !myR[p.id]; }).length : 0;
     };
     var h = '<div class="tabs"><button data-tab="board" class="' + (v.tab === 'board' ? 'on' : '') + '">📌 公告</button>' +
       '<button data-tab="hist" class="' + (v.tab === 'hist' ? 'on' : '') + '">🗂 歷史區</button></div>' +
-      '<div class="seg">' + L.UNITS.filter(function (u) { return tabs.indexOf(u.id) >= 0; }).map(function (u) {
+      '<div class="seg"' + (tabs.length > 1 ? '' : ' hidden') + '>' + L.UNITS.filter(function (u) { return tabs.indexOf(u.id) >= 0; }).map(function (u) {   // 只有一區就不顯示品牌分頁列
         var n = (v.tab === 'board' && u.id === home) ? unread(u.id) : 0;
         return '<button data-unit="' + u.id + '" class="' + (v.unit === u.id ? 'on' : '') + '">' + u.name + (n ? '<span class="n">' + n + '</span>' : '') + '</button>';
       }).join('') + '</div>';

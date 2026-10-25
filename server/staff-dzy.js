@@ -35,6 +35,9 @@ const UNIT_OF_DZY = {
   // 管理系統不分三組 → 既有的維持原組別、新人先歸 hq-dzy。其餘單位（mzt-wx／mzt-rg／mzt-mc／yiwu-*）佈告欄沒有對應單位，不新增、單位不動
   'mzt-hq': { hq: true, hqUnit: 'hq-mzt' }, 'mala-hq': { hq: true, hqUnit: 'hq-mala' }, 'dzy-hq': { hq: true }
 };
+// 總監級以上（2026-10-25 v0.8.0，docs/brand-visibility.md）：管理系統職稱代碼在這裡的人，佈告欄三個品牌分頁都看得到（seeAll）。
+// 正本＝dzy apps-script/platform/Staff.gs 的 org 職稱：hm 總監、odir 品牌辦公室總監、rdd 廚藝總監、ceo 執行長、gm 總經理、chair 董事長
+const SEE_ALL_TITLES = ['hm', 'odir', 'rdd', 'ceo', 'gm', 'chair'];
 const MIGRATED_KEY = 'staff_dzy_migrated';          // 已搬家（dzy 欄填好、有快照）
 const SNAP_KEY = 'staff_dzy_snapshot';               // 搬家前快照的檔名（rollback 用；已搬家後再跑 --apply 不會覆蓋它）
 const SWITCH_KEY = 'staff_dzy_switchable';          // 可切換（雙跑連續 7 天全同才由 dual 寫入，G8）
@@ -62,7 +65,9 @@ function normalizeDirectory(data, meta) {
     seen[dzy] = 1;
     const clocks = (Array.isArray(r.clocks) ? r.clocks : []).map((c) => ({ store: String(c && c.store_code || '').trim().toLowerCase(), empId: String(c && c.emp_id || '').trim(), role: String(c && c.role || '').trim() }))
       .filter((c) => c.store && c.empId);
-    people.push({ dzy, name, unit: String(r.unit || '').trim(), active: r.active === true, clocks });
+    // title：管理系統舊版沒有這一欄 → null（dzyApply 不動 seeAll）
+    const title = Object.prototype.hasOwnProperty.call(r, 'title') ? String(r.title == null ? '' : r.title).trim().toLowerCase() : null;
+    people.push({ dzy, name, unit: String(r.unit || '').trim(), title, active: r.active === true, clocks });
   });
   if (dupNo.length) throw bad(`管理系統名單有重複的 emp_no（${dupNo.length} 個：${dupNo.slice(0, 10).join('、')}），整輪中止`, 'DIR_DUP');   // G2：不取第一筆
   people.forEach((p) => p.clocks.forEach((c) => { const k = c.store + ':' + c.empId; (owners[k] = owners[k] || []).indexOf(p.dzy) < 0 && owners[k].push(p.dzy); }));
@@ -117,7 +122,7 @@ function wantedLineHash(p, got) {
 // ambiguous（一個打卡鍵對到兩個以上 DZY：G1）、dupHash（同一個非空 lineHash 會寫給兩個以上在職帳號：G1）、lineConflicts（G7）
 function dzyApply(staff, dirNorm, got, nowIso) {
   const cur = clone(staff || []), notes = [];
-  const ch = { added: [], adopted: [], deactivated: [], reactivated: [], renamed: [], moved: [], srcChanged: [], lineChanged: [], skipped: [] };
+  const ch = { added: [], adopted: [], deactivated: [], reactivated: [], renamed: [], moved: [], srcChanged: [], lineChanged: [], access: [], skipped: [] };
   const manual = [], lineConflicts = [];
   const amb = dirNorm.ambiguousKeys;
   const sOfDzy = (d) => { const m = cur.filter((s) => s.dzy === d); return m.filter((s) => s.active)[0] || m[0] || null; };
@@ -162,6 +167,15 @@ function dzyApply(staff, dirNorm, got, nowIso) {
       if (unit !== S.unit || store !== String(S.store || '')) { S.unit = unit; S.store = store; ch.moved.push(S.id); }
     } else notes.push(S.id + ' 的單位代碼不在對照表，單位不動');
     if (home && S.src !== home) { S.src = home; ch.srcChanged.push(S.id); }
+  });
+  // 總監級以上看全部品牌（seeAll）：只在管理系統有回 title 時才動；離職一律清掉。只存 true，不是就刪掉這個欄位
+  cur.forEach((S) => {
+    const p = S.dzy && dirNorm.byDzy[S.dzy];
+    if (!p || (p.title === null && p.active)) return;   // 沒有 title（管理系統舊版）：只在管理系統確認離職時清（#45-13）
+    const want = S.active && SEE_ALL_TITLES.indexOf(p.title) >= 0;
+    if (want === (S.seeAll === true)) return;
+    if (want) S.seeAll = true; else delete S.seeAll;
+    ch.access.push(S.id);
   });
   // LINE 雜湊（來源：打卡名冊 raw；在職→依來源撤銷規則，離職→清空）
   cur.forEach((S) => {
@@ -397,7 +411,8 @@ async function runMigrate(o) {
   } finally { try { db.close(); } catch (e) {} }
 }
 // G3：人工確認認領時清掉舊帳號的憑證：密碼、LINE 綁定都清，pinVer+1 讓已登入的手機失效
-function clearCredentials(s) { s.pinHash = ''; s.salt = ''; s.fail = 0; s.lineHash = ''; s.pinVer = (Number(s.pinVer) || 0) + 1; }
+// seeAll 一起清（#45-2）：換人認領不繼承前一位的總監可見，下一輪同步依新的人的職稱再給
+function clearCredentials(s) { s.pinHash = ''; s.salt = ''; s.fail = 0; s.lineHash = ''; delete s.seeAll; s.pinVer = (Number(s.pinVer) || 0) + 1; }
 // 人工認領：S-xxx 與 DZY 編號由人確認是同一人（姓名不一致時 dzyApply 不會自動認領）。o: { dir, fetchDir, id, dzy }
 async function runClaim(o) {
   const dirN = await o.fetchDir();
@@ -438,6 +453,7 @@ function runRollback(o) {
         let n = c;
         if (byId[c.id]) { n = Object.assign({}, byId[c.id], { pinHash: c.pinHash, salt: c.salt, fail: c.fail, pinVer: c.pinVer }); delete n.offBy; restored++; }
         n.pinVer = (Number(n.pinVer) || 0) + 1;
+        delete n.seeAll;   // 回打卡模式後沒有任何同步會收回 seeAll → 一律清掉（#45-2）；總監回退期只看自己單位
         up.run(JSON.stringify(n), n.id);
       });
       db.prepare('DELETE FROM kv WHERE k IN (?, ?)').run(MIGRATED_KEY, SWITCH_KEY);
@@ -539,5 +555,5 @@ async function main() {
 }
 if (require.main === module) main().catch((e) => { console.error('✗ ' + (e && e.message || e)); process.exit(1); });
 
-module.exports = { redeemTicket, SWITCH_KEY, SNAP_KEY, roundProblem, runClaim, runRollback, clearCredentials, readRawClock, STORE_OF_SRC, SRC_OF_STORE, UNIT_OF_DZY, MIGRATED_KEY, DUAL_NEED_DAYS, normalizeDirectory, dzyApply, compareStaff, classifyMigration, massProblem, wantedLineHash,
+module.exports = { redeemTicket, SEE_ALL_TITLES, SWITCH_KEY, SNAP_KEY, roundProblem, runClaim, runRollback, clearCredentials, readRawClock, STORE_OF_SRC, SRC_OF_STORE, UNIT_OF_DZY, MIGRATED_KEY, DUAL_NEED_DAYS, normalizeDirectory, dzyApply, compareStaff, classifyMigration, massProblem, wantedLineHash,
   clockKeyOfSrc, homeSrcOf, dirConfig, fetchDirectory, effectiveSource, sourceWarning, runDzySync, runMigrate, runDual, dualStatus, loadOverrides };

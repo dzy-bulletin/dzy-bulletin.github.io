@@ -2,7 +2,7 @@
 'use strict';
 var CFG = (function () {
   var c = {
-    VERSION: '0.7.9',
+    VERSION: '0.8.0',
     // 管理系統「公告專區」嵌入本站時（?embed=dzy），只接受這個網站送來的入場券（2026-10-16）。本機測試另認 localhost（見下方）
     DZY_ORIGIN: 'https://dzy.mozhuting.com',
     ROSTER_CSV: '',   // 「鼎兆元｜電子佈告欄｜公開名單」試算表（獨立檔案，只有遮罩姓名）發布到網路的 CSV 網址（不經 Apps Script，秒開）；空白＝只用後端

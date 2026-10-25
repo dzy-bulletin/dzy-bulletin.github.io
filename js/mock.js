@@ -35,7 +35,7 @@ var DZYB_MOCK = (function () {
         pinVer: 1, fail: x.fail || 0, active: true, createdAt: '2026-01-01T00:00:00.000Z', deletedAt: '', src: x.src || '', store: x.store || '',
         lineHash: x.lineUid ? auth.lineHash(x.lineUid) : '',   // 帶入資料的 lineUid＝模擬打卡系統已綁定的 LINE userId
         act: x.code ? actFor(x.code) : '' };                  // 帶入資料的 code＝主管已產生、還沒用的啟用碼（明碼，這裡雜湊）
-    });
+    }).map(function (s, i) { if (d.staff[i].seeAll === true) s.seeAll = true; return s; });   // 總監級以上（2026-10-25）
     var posts = d.posts.map(function (p) {
       return { id: p.id, title: p.title, body: p.body || '', units: p.units, publishOn: p.publishOn, expiresOn: p.expiresOn || '',
         pinned: !!p.pinned, published: p.published !== false, offOn: p.offOn || '', files: p.files || [],
@@ -113,6 +113,8 @@ var DZYB_MOCK = (function () {
     blobOf: function (id) { return BLOBS[id] || null; },
     dropPost: function (id) { var d = load(); d.posts = d.posts.filter(function (p) { return p.id !== id; }); save(); },   // 測試用：模擬 reqId 紀錄指向的公告已不存在
     setAdminInit: function (pw) { var d = load(); d.admin.init = pw; save(); },   // 模擬 Eason 在指令碼屬性填 ADMIN_INIT
+    addRead: function (postId, staffId) { var d = load(); var s = d.staff.filter(function (x) { return x.id === staffId; })[0]; d.reads.push({ postId: postId, staffId: staffId, name: s.name, unit: s.unit, at: '2026-09-01T00:00:00.000Z', sig: '' }); save(); },   // 測試用：模擬換單位前簽過的公告
+    setSeeAll: function (id, on) { var d = load(); d.staff.forEach(function (s) { if (s.id === id) { if (on) s.seeAll = true; else delete s.seeAll; } }); save(); },   // 測試用：模擬管理系統同步職稱（總監級以上）
     setClockActive: function (empId, on) { CLOCK.forEach(function (r) { if (r.empId === empId) r.active = on; }); },   // 測試用
     reset: function () { db = seed(); save(); },
     testerReset: function () {                       // 預覽用：清掉測試員的密碼與簽名

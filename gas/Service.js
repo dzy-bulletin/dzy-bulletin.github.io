@@ -30,7 +30,9 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify, opts) 
     if (!p) throw err('NOT_FOUND', '找不到這則公告');
     return p;
   }
-  function me(s) { return { id: s.id, name: s.name, unit: s.unit }; }
+  // seeAll（2026-10-25）：總監級以上看全部品牌，只有 true 才帶，前端依此算分頁
+  function me(s) { var o = { id: s.id, name: s.name, unit: s.unit }; if (s.seeAll === true) o.seeAll = true; return o; }
+  function sees(s, p) { return L.canSee(s.unit, p, s.seeAll === true); }
   function staffOf(req) {
     var id = auth.staffIdOf(req.token);
     var s = store.getStaff().filter(function (x) { return x.id === id; })[0];
@@ -66,8 +68,10 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify, opts) 
   function myReadIds(sid) {
     return store.getReads().filter(function (r) { return r.staffId === sid; }).map(function (r) { return r.postId; });
   }
-  function myReadAt(sid) {
-    var o = {}; store.getReads().forEach(function (r) { if (r.staffId === sid) o[r.postId] = r.at; }); return o;
+  // posts：只回這些公告的已讀（#45-12：換單位／降職後不透露看不到的公告編號與簽名時間）；ack 的重複檢查用 myReadIds（完整紀錄）
+  function myReadAt(sid, posts) {
+    var ok = {}; posts.forEach(function (p) { ok[p.id] = 1; });
+    var o = {}; store.getReads().forEach(function (r) { if (r.staffId === sid && ok[r.postId]) o[r.postId] = r.at; }); return o;
   }
   function targets(p) {
     return store.getStaff().filter(function (s) { return s.active && L.mustSign(s.unit, p); });
@@ -99,8 +103,8 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify, opts) 
   function boardFor(s) {
     var td = clock.today();
     var posts = store.getPosts().map(function (p) { return withStatus(p, td); })
-      .filter(function (p) { return p.status.state === 'on' && L.canSee(s.unit, p); }).sort(L.sortBoard);
-    return { today: td, me: me(s), posts: posts, myReads: myReadAt(s.id) };
+      .filter(function (p) { return p.status.state === 'on' && sees(s, p); }).sort(L.sortBoard);
+    return { today: td, me: me(s), posts: posts, myReads: myReadAt(s.id, posts) };
   }
 
   var H = {
@@ -200,14 +204,14 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify, opts) 
     board: function (q) { return boardFor(staffOf(q)); },
     history: function (q) {
       var s = staffOf(q), td = clock.today();
-      var posts = store.getPosts().filter(function (p) { return L.status(p, td).state === 'off' && L.canSee(s.unit, p); })
+      var posts = store.getPosts().filter(function (p) { return L.status(p, td).state === 'off' && sees(s, p); })
         .sort(function (a, b) { return L.sortHistory(a, b, td); }).map(function (p) { return withStatus(p, td); });
-      return { today: td, posts: posts, myReads: myReadAt(s.id) };
+      return { today: td, me: me(s), posts: posts, myReads: myReadAt(s.id, posts) };
     },
     ack: function (q) {
       var s = staffOf(q), p = findPost(q.postId);
       if (L.status(p, clock.today()).state !== 'on') throw err('BAD_REQ', '這則公告已下架');
-      if (!L.canSee(s.unit, p) || !L.mustSign(s.unit, p)) throw err('BAD_REQ', '這則公告不需要你簽名');
+      if (!sees(s, p) || !L.mustSign(s.unit, p)) throw err('BAD_REQ', '這則公告不需要你簽名');
       var sig = String(q.sig || '');
       if (sig.indexOf('data:image/') !== 0 || sig.length > L.SIG_MAX_CHARS) throw err('BAD_REQ', '簽名格式錯誤');
       if (myReadIds(s.id).indexOf(p.id) >= 0) throw err('ALREADY', '你已經簽過這則公告');

@@ -800,6 +800,9 @@ FileVault 開著就不能自動登入，LaunchAgent 在停電重開後不會啟�
 
 ## 附錄 B：之後更新程式（已部署或部署到一半的機器）
 
+> **v0.8.0（公告依品牌可見）**：先更新管理系統後端（svcDirectory 回 title），再更新這台；之後同一批把 Apps Script 推到 0.8.0。附錄 D 第 9 步 rollback 會清掉所有 seeAll。詳 `docs/brand-visibility.md` 部署順序。
+
+
 適用：Mac mini 已照舊版手冊部署（或做到一半），要更新到新版。`mini/m4` 在合併進 `main` 之前可能被 rebase（改寫歷史），這時單純 `git pull` 會失敗（無法快轉）；下面的寫法兩種情況都能處理。**M1～M4 合併後**要改跟 `main`：先 `git -C "$REPO" fetch -q origin && git -C "$REPO" checkout -q main`，再照下面做。**部署做到一半時**：先照下面更新程式，再用新版手冊從原本做到的那一步繼續（證據檔保留，不用重做前面的步驟）。
 
 ```sh

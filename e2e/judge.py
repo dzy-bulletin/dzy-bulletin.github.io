@@ -88,8 +88,10 @@ async def main(base, brk):
         await q('#p2').fill('2580'); await q('#pfGo').click()
         await pg.wait_for_selector('.card'); await wait(300)
         check('A6 設定密碼後進入公告', '測試員甲' in await txt('#meBar'))
-        tabs = await pg.locator('#app .seg button').all_inner_texts()
-        check('A7 未讀紅字只在自己單位分頁', tabs == ['墨竹亭', '小辛辣3', '央廚'], tabs)
+        seg_hidden = lambda: pg.evaluate("!!document.querySelector('#app .seg[hidden]')")
+        cards = lambda: pg.evaluate("[...document.querySelectorAll('#app .card')].map(c => c.dataset.post)")
+        # 2026-10-25 v0.8.0 只看自己品牌：小辛辣門市只有一區 → 品牌分頁列不顯示；看不到墨竹亭、央廚的公告
+        check('A7 只看自己品牌（分頁列隱藏、沒有別品牌公告）', await seg_hidden() and not ({'P-20260915-001', 'P-20260927-001'} & set(await cards())), await cards())
         check('A8 未讀紅點 3 個', await count('.unread') == 3)
 
         await q('[data-post="P-20260920-001"]').click(); await wait()
@@ -124,12 +126,17 @@ async def main(base, brk):
         check('A16 名單標出鎖定', '🔒' in lockname, lockname)
 
         await login('S-017', grp='hq')
-        tabs = await pg.locator('#app .seg button').all_inner_texts()
-        check('A17 總部墨竹亭看到三個分頁、紅點只在墨竹亭', [t.rstrip('0123456789') for t in tabs] == ['墨竹亭', '小辛辣', '央廚'] and tabs[1] == '小辛辣' and tabs[2] == '央廚', tabs)
+        check('A17 總部墨竹亭只看墨竹亭（分頁列隱藏、有墨竹亭公告、沒有小辛辣／央廚）', await seg_hidden() and 'P-20260915-001' in await cards() and not ({'P-20260920-001', 'P-20260927-001'} & set(await cards())), await cards())
         await q('#chgMe').click(); await pg.wait_for_selector('[data-pick]')
         await login('S-016', grp='hq')
+        check('A18 總部鼎兆元（部門同仁）只看墨竹亭、只簽「全部」', await seg_hidden() and 'P-20260915-001' in await cards() and 'P-20260920-001' not in await cards() and await count('.unread') == 2, await cards())
+        # 總監級以上（管理系統職稱同步 seeAll）：三個分頁
+        await pg.evaluate("DZYB_MOCK.setSeeAll('S-016', true)"); await q('[data-tab="hist"]').click(); await wait(500); await q('[data-tab="board"]').click(); await wait(800)
         tabs = await pg.locator('#app .seg button').all_inner_texts()
-        check('A18 總部鼎兆元看到三個分頁、只簽「全部」', len(tabs) == 3 and await count('.unread') == 2, tabs)
+        check('A18b 總監級以上看到三個分頁、紅點只在墨竹亭', not await seg_hidden() and [t.rstrip('0123456789') for t in tabs] == ['墨竹亭', '小辛辣', '央廚'] and tabs[1] == '小辛辣' and tabs[2] == '央廚', tabs)
+        await q('[data-unit="cf"]').click(); await wait(300)
+        check('A18c 總監切到央廚看得到央廚公告', 'P-20260927-001' in await cards(), await cards())
+        await pg.evaluate("DZYB_MOCK.setSeeAll('S-016', false)")
 
         # ---------- 設定（主管）----------
         await q('#openAdmin').click(); await q('#pc').fill('9999'); await q('#pcGo').click(); await wait(400)

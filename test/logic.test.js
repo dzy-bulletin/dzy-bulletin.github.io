@@ -91,16 +91,38 @@ eq('post exp same day ok', L.postProblem(D({ expiresOn: '2026-09-29' })), null);
 
 // C15 總部三組
 const ALLP = { units: ['mzt', 'mala', 'cf'] }, MZT = { units: ['mzt'] }, MALA = { units: ['mala'] }, CF = { units: ['cf'] }, MC = { units: ['mzt', 'cf'] };
-eq('viewTabs store', L.viewTabs('cf'), ['mzt', 'mala', 'cf']);
-eq('viewTabs hq-dzy', L.viewTabs('hq-dzy'), ['mzt', 'mala', 'cf']);
-eq('viewTabs hq-mzt', L.viewTabs('hq-mzt'), ['mzt', 'mala', 'cf']);
-eq('viewTabs hq-mala', L.viewTabs('hq-mala'), ['mzt', 'mala', 'cf']);
-eq('canSee store other unit', L.canSee('mala', CF), true);
+// 2026-10-25 v0.8.0 公告依品牌可見（docs/brand-visibility.md）
+eq('viewTabs mzt', L.viewTabs('mzt'), ['mzt']);
+eq('viewTabs mala', L.viewTabs('mala'), ['mala']);
+eq('viewTabs cf', L.viewTabs('cf'), ['cf']);
+eq('viewTabs hq-mzt', L.viewTabs('hq-mzt'), ['mzt']);
+eq('viewTabs hq-mala', L.viewTabs('hq-mala'), ['mala']);
+eq('viewTabs hq-dzy', L.viewTabs('hq-dzy'), ['mzt']);
+eq('viewTabs unknown unit', L.viewTabs('xx'), []);
+eq('viewTabs seeAll store', L.viewTabs('mala', true), ['mzt', 'mala', 'cf']);
+eq('viewTabs seeAll hq-dzy', L.viewTabs('hq-dzy', true), ['mzt', 'mala', 'cf']);
+eq('viewTabs seeAll truthy only', L.viewTabs('mala', 'yes'), ['mala']);
+eq('canSee store other unit', L.canSee('mala', CF), false);
+eq('canSee store own', L.canSee('mala', MALA), true);
+eq('canSee store all', L.canSee('cf', ALLP), true);
+eq('canSee store partial overlap', L.canSee('cf', MC), true);
+eq('canSee mala partial no overlap', L.canSee('mala', MC), false);
 eq('canSee hq-mzt mzt', L.canSee('hq-mzt', MZT), true);
 eq('canSee hq-mzt all', L.canSee('hq-mzt', ALLP), true);
-eq('canSee hq-mzt mala', L.canSee('hq-mzt', MALA), true);
-eq('canSee hq-mala cf', L.canSee('hq-mala', CF), true);
-eq('canSee hq-dzy cf', L.canSee('hq-dzy', CF), true);
+eq('canSee hq-mzt mala', L.canSee('hq-mzt', MALA), false);
+eq('canSee hq-mala cf', L.canSee('hq-mala', CF), false);
+eq('canSee hq-dzy mzt', L.canSee('hq-dzy', MZT), true);
+eq('canSee hq-dzy cf', L.canSee('hq-dzy', CF), false);
+eq('canSee hq-dzy all', L.canSee('hq-dzy', ALLP), true);
+eq('canSee seeAll cf', L.canSee('mala', CF, true), true);
+eq('canSee seeAll hq-dzy mala', L.canSee('hq-dzy', MALA, true), true);
+eq('canSee no units', L.canSee('mala', { units: [] }), false);
+eq('canSee unknown unit', L.canSee('xx', ALLP), false);
+// 不變式（#45-3）：要簽的公告一定看得到（ack 的 canSee 守門才有意義）
+{ const combos = [[], ['mzt'], ['mala'], ['cf'], ['mzt', 'mala'], ['mzt', 'cf'], ['mala', 'cf'], ['mzt', 'mala', 'cf']];
+  const bad = [];
+  ['mzt', 'mala', 'cf', 'hq-dzy', 'hq-mzt', 'hq-mala'].forEach(u => [false, true].forEach(sa => combos.forEach(c => { if (L.mustSign(u, { units: c }) && !L.canSee(u, { units: c }, sa)) bad.push(u + sa + c); })));
+  eq('mustSign ⇒ canSee（所有單位 × seeAll × 單位組合）', bad, []); }
 eq('mustSign store own', L.mustSign('mala', MALA), true);
 eq('mustSign store other', L.mustSign('mala', CF), false);
 eq('mustSign hq-dzy all', L.mustSign('hq-dzy', ALLP), true);

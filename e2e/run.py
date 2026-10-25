@@ -86,16 +86,21 @@ def main():
         def shot(name): pg.screenshot(path=os.path.join(ART, name + '.png'))
         def cards():
             return pg.evaluate("[...document.querySelectorAll('#app .card')].map(c => [c.querySelector('h3').textContent, !!c.querySelector('.unread')])")
-        def tabs(): return pg.evaluate("[...document.querySelectorAll('#app .seg button')].map(b => b.textContent)")
+        def tabs(): return pg.evaluate("(() => { const s = document.querySelector('#app .seg'); return s && !s.hidden ? [...s.querySelectorAll('button')].map(b => b.textContent) : []; })()")   # 只有一區時品牌分頁列不顯示（2026-10-25）
+        def sa(sid): return W.staff[sid].get('seeAll') is True
+        def vt(sid): return D.view_tabs(W.staff[sid]['unit'], sa(sid))
+        def click_unit(u, verified=''):
+            if tabs(): click(f'[data-unit="{u}"]', verified)
 
         def verify_board(sid, day, label):
             s = W.staff[sid]; home = D.home_tab(s['unit'])
-            exp_tabs = [D.UNIT_NAME[u] + (str(len(W.unread(sid, day))) if u == home and W.unread(sid, day) else '') for u in D.view_tabs(s['unit'])]
+            exp_tabs = [D.UNIT_NAME[u] + (str(len(W.unread(sid, day))) if u == home and W.unread(sid, day) else '') for u in vt(sid)]
+            if len(exp_tabs) <= 1: exp_tabs = []
             check(f'{label} 分頁與未讀紅字', tabs() == exp_tabs, f'{tabs()} vs {exp_tabs}')
-            for u in D.view_tabs(s['unit']):
-                click(f'[data-unit="{u}"]', f'切到{D.UNIT_NAME[u]}分頁'); scan(f'{label}-{u}')
+            for u in vt(sid):
+                click_unit(u, f'切到{D.UNIT_NAME[u]}分頁'); scan(f'{label}-{u}')
                 exp = [[p['title'], D.must_sign(s['unit'], p) and (p['id'], sid) not in W.reads]
-                       for p in D.board_order([p for p in W.board(s['unit'], day) if u in p['units']])]
+                       for p in D.board_order([p for p in W.board(s['unit'], day, sa(sid)) if u in p['units']])]
                 check(f'{label} {D.UNIT_NAME[u]}分頁公告順序與紅點', cards() == exp, f'{cards()} vs {exp}')
 
         def picker_names(grp):
@@ -186,10 +191,11 @@ def main():
         # 簽一則：挑有附件的未讀優先
         me = nopin['id']; mu = W.staff[me]['unit']
         un = W.unread(me, td)
-        pool = un or [p for p in W.board(mu, td) if D.home_tab(mu) in p['units']] or W.board(mu, td)
+        mb = W.board(mu, td, sa(me))
+        pool = un or [p for p in mb if D.home_tab(mu) in p['units']] or mb
         target = sorted(pool, key=lambda p: -len(p['files']))[0]
-        tab = D.home_tab(mu) if D.home_tab(mu) in target['units'] else target['units'][0]
-        click(f'[data-unit="{tab}"]'); click(f'[data-post="{target["id"]}"]', '打開公告'); scan('公告內容')
+        tab = D.home_tab(mu) if D.home_tab(mu) in target['units'] else [u for u in target['units'] if u in vt(me)][0]
+        click_unit(tab); click(f'[data-post="{target["id"]}"]', '打開公告'); scan('公告內容')
         check('A 公告內容標題正確（不論是否需簽）', target['title'] in text('.sheet h2'))
         if not un:
             for i, f in enumerate(target['files']):
@@ -216,9 +222,9 @@ def main():
             check('A 本組資料此人無未讀（跳過簽名，仍驗證公告）', True)
 
         click('[data-tab="hist"]', '歷史區'); pg.wait_for_selector('#app .hint'); wait(400); scan('歷史區'); shot('A04-歷史區')
-        for u in D.view_tabs(mu):
-            click(f'[data-unit="{u}"]')
-            hist = [p for p in W.history(mu, td) if u in p['units']]
+        for u in vt(me):
+            click_unit(u)
+            hist = [p for p in W.history(mu, td, sa(me)) if u in p['units']]
             months = sorted({D.status(p, td)[2] for p in hist}, reverse=True)
             got = pg.evaluate("[...document.querySelectorAll('[data-month]')].map(b => b.textContent)")
             check(f'A 歷史區 {D.UNIT_NAME[u]} 月份', got == [D.fmt_ym(m) for m in months], f'{got} vs {months}')
@@ -426,9 +432,9 @@ def main():
         check('B 本組資料有會在跳日期後到期的公告', len(soon) > 0, '資料產生器應保證 soon 類型')
         verify_board(dzy, tb, 'B 總部鼎兆元')
         click('[data-tab="hist"]'); wait(500)
-        for u in D.UNITS:
-            click(f'[data-unit="{u}"]')
-            months = sorted({D.status(p, tb)[2] for p in W.history('hq-dzy', tb) if u in p['units']}, reverse=True)
+        for u in vt(dzy):
+            click_unit(u)
+            months = sorted({D.status(p, tb)[2] for p in W.history('hq-dzy', tb, sa(dzy)) if u in p['units']}, reverse=True)
             got = pg.evaluate("[...document.querySelectorAll('[data-month]')].map(b => b.textContent)")
             check(f'B 歷史區 {D.UNIT_NAME[u]} 月份（含剛到期）', got == [D.fmt_ym(m) for m in months], f'{got} vs {months}')
         shot('B01-歷史區')
