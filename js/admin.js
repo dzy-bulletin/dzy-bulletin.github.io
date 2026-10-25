@@ -141,7 +141,7 @@ var Admin = (function () {
       '<label class="f">內容</label><textarea class="inp" id="fBody" maxlength="' + L.BODY_MAX + '"></textarea>' +
       '<label class="f">顯示單位 *</label><div class="chk"><label><input type="checkbox" id="uAll"' + (all ? ' checked' : '') + '> 全部</label>' +
       L.UNITS.map(function (u) { return '<label><input type="checkbox" class="uOne" value="' + u.id + '"' + (d.units.indexOf(u.id) >= 0 ? ' checked' : '') + '> ' + u.name + '</label>'; }).join('') + '</div>' +
-      '<div class="row"><div><label class="f">上架日 *</label><input class="inp" type="date" id="fPub"></div>' +
+      '<div class="row dates"><div><label class="f">上架日 *</label><input class="inp" type="date" id="fPub"></div>' +
       '<div><label class="f">到期日（到期自動下架）</label><input class="inp" type="date" id="fExp"></div></div>' +
       '<div class="hint" style="margin:4px 0 0">到期日留空＝不自動下架，需手動下架。</div>' +
       '<label class="f">置頂</label><div class="chk"><label><input type="checkbox" id="fPin"' + (d.pinned ? ' checked' : '') + '> 置頂顯示在最上方</label></div>' +

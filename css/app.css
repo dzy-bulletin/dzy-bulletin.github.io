@@ -59,7 +59,7 @@ header.top h1 small{font-weight:400;opacity:.8}
 .sheet .body{padding:14px 16px}
 .sheet h2{font-size:19px;margin:4px 0 8px;line-height:1.4}
 .content{background:#fff;border-radius:12px;padding:14px;white-space:pre-wrap;word-break:break-word;margin:12px 0}
-.files{display:grid;gap:8px;margin:10px 0 16px}
+.files{display:grid;grid-template-columns:minmax(0,1fr);gap:8px;margin:10px 0 16px}   /* 長檔名不撐破彈窗（2026-10-26 手機巡檢） */
 .file{display:flex;align-items:center;gap:10px;background:#fff;border-radius:12px;padding:10px 12px;border:1px solid var(--line);width:100%;text-align:left}
 .ficon{width:36px;height:36px;border-radius:8px;display:grid;place-items:center;color:#fff;font-size:11px;font-weight:700;flex:none}
 .ficon.pdf{background:#d93025}.ficon.docx{background:#2b579a}.ficon.xlsx{background:#217346}
@@ -96,7 +96,9 @@ label.f{display:block;font-size:13px;color:var(--sub);margin:10px 0 4px;font-wei
 textarea.inp{min-height:120px;resize:vertical}
 .chk{display:flex;flex-wrap:wrap;gap:8px}
 .chk label{display:flex;align-items:center;gap:5px;border:1px solid var(--line);border-radius:10px;padding:6px 10px;background:#fff;font-size:14px}
-.row{display:flex;gap:10px}.row>*{flex:1}
+.row{display:flex;gap:10px}.row>*{flex:1;min-width:0}   /* 日期框內建寬度不撐出畫面（2026-10-26 手機巡檢） */
+.row .inp,input[type=file]{min-width:0;max-width:100%}
+@media (max-width:400px){.row.dates{flex-direction:column;gap:0}}   /* 窄手機上架日／到期日上下排，日期不被切 */
 .arow{border-top:1px solid var(--line);padding:11px 0}
 .arow:first-child{border-top:0}
 .arow .t{font-weight:600;line-height:1.4}
