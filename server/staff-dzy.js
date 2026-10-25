@@ -325,7 +325,9 @@ function sourceWarning(env, dbOrKv) {
   return String(env.STAFF_SOURCE || '').trim().toLowerCase() === 'dzy' && effectiveSource(env, dbOrKv) !== 'dzy'
     ? 'STAFF_SOURCE=dzy 但還不能切換（要先 migrate --apply，再雙跑連續 7 天全同由 dual 寫入「可切換」旗標），先照打卡同步（clock）運作' : '';
 }
-const brief = (ch) => ({ added: ch.added.length, adopted: ch.adopted.length, deactivated: ch.deactivated.length, reactivated: ch.reactivated.length, renamed: ch.renamed.length, moved: ch.moved.length, srcChanged: ch.srcChanged.length, lineChanged: ch.lineChanged.length, skipped: ch.skipped.length });
+const brief = (ch) => ({ added: ch.added.length, adopted: ch.adopted.length, deactivated: ch.deactivated.length, reactivated: ch.reactivated.length, renamed: ch.renamed.length, moved: ch.moved.length, srcChanged: ch.srcChanged.length, lineChanged: ch.lineChanged.length, access: ch.access.length, skipped: ch.skipped.length });
+// 跑完後在職且看全部品牌（總監級以上）的人數；只給人數（2026-10-25）
+const seeAllCount = (staff) => staff.filter((s) => s.active && s.seeAll === true).length;
 
 // ================= G1：dzy 同步（mirror.js 第 4 步在 STAFF_SOURCE=dzy 時呼叫；也可手動） =================
 const LASTFILE = 'staff-dzy-last.json';
@@ -360,12 +362,12 @@ async function runDzySync(o) {
       const staff = readStaff(db), nowIso = (o.now ? o.now() : new Date()).toISOString();
       const r = dzyApply(staff, dirN, got, nowIso), rp = roundProblem(r), mp = o.allowMass ? '' : massProblem(staff, r.ch);
       if (rp || mp) { db.exec('ROLLBACK'); return fin({ ok: false, error: rp || mp, planned: brief(r.ch), orphans: r.orphans.length }); }
-      if (o.dryRun) { db.exec('ROLLBACK'); return { ok: true, dryRun: true, changes: brief(r.ch), notes: r.notes, orphans: 0, unmanaged: r.unmanaged.length, manual: r.manual.length, alerts: r.lineConflicts, lineSkipped: lineErr || undefined }; }
+      if (o.dryRun) { db.exec('ROLLBACK'); return { ok: true, dryRun: true, changes: brief(r.ch), seeAll: seeAllCount(r.staff), notes: r.notes, orphans: 0, unmanaged: r.unmanaged.length, manual: r.manual.length, alerts: r.lineConflicts, lineSkipped: lineErr || undefined }; }
       saveChanged(db, r.staff, r.changed);
       db.exec('COMMIT');
       const c = brief(r.ch);
       return fin({ ok: true, updated: r.changed.length, linked: r.staff.filter((s) => s.active && s.lineHash).length, sourceErrors: Array.isArray(got && got.errors) ? got.errors.length : 0,
-        changes: c, notes: r.notes, orphans: 0, unmanaged: r.unmanaged.length, manual: r.manual.length, manualIds: r.manual.map((x) => x.id), alerts: r.lineConflicts, lineSkipped: lineErr || undefined });
+        changes: c, seeAll: seeAllCount(r.staff), notes: r.notes, orphans: 0, unmanaged: r.unmanaged.length, manual: r.manual.length, manualIds: r.manual.map((x) => x.id), alerts: r.lineConflicts, lineSkipped: lineErr || undefined });
     } catch (e) { try { db.exec('ROLLBACK'); } catch (y) {} throw e; }
   } finally { try { db.close(); } catch (e) {} }
 }
@@ -538,7 +540,7 @@ async function main() {
     process.exit(s.canRetire ? 0 : 1);
   } else if (cmd === 'sync') {
     const r = await runDzySync({ dir, bridge, fetchDir, allowMass: has('--allow-mass'), dryRun: has('--dry-run') });
-    console.log(r.ok ? `同步${r.dryRun ? '（試跑，沒寫入）' : '完成'}：` + JSON.stringify(r.changes) + `｜管理系統沒有的在職 ${r.orphans} 人、未掛 dzy 的在職 ${r.unmanaged} 人` : '✗ ' + r.error);
+    console.log(r.ok ? `同步${r.dryRun ? '（試跑，沒寫入）' : '完成'}：` + JSON.stringify(r.changes) + `｜看全部品牌（總監級以上）${r.seeAll} 人、這輪變動 ${r.changes.access} 人｜管理系統沒有的在職 ${r.orphans} 人、未掛 dzy 的在職 ${r.unmanaged} 人` : '✗ ' + r.error);
     (r.notes || []).forEach((n) => console.log('  ' + n));
     if (r.manual) console.log(`  需人工認領 ${r.manual} 筆（姓名不一致）：` + (r.manualIds || []).join('、'));
     (r.alerts || []).length && console.log('  ⚠ 多來源 LINE 綁定不同、已鎖定自動登入：' + r.alerts.join('、'));
