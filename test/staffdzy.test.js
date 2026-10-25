@@ -456,6 +456,19 @@ const bridgeOf = (got, fail) => { const b = { calls: [] }; b.call = async (op, p
       let e = ''; try { await SD.runMigrate({ dir: d, fetchDir: fetch3, apply: true }); } catch (x) { e = x.code; }
       eq('G2 搬家：同樣中止（丟 DIR_DUP）', e, 'DIR_DUP'); setRows(dirOk); }
 
+    // ---- 看全部品牌人數（2026-10-25 mini 實測 dry-run 看不到 ch.access）：changes.access＝這輪變動、seeAll＝跑完後在職總監級人數 ----
+    { setRows([Object.assign(P('DZY001', '測試甲', 'mala-gf', true, [['gf', 'A1']]), { title: 'hm' }), Object.assign(P('DZY002', '測試乙', 'mala-gf', true, [['gf', 'A2']]), { title: 'pt' })]);
+      const d = fresh(base());
+      let r = await SD.runDzySync({ dir: d, bridge: bridgeOf(gotOk), fetchDir: fetch3, dryRun: true });
+      eq('dry-run 印出看全部品牌：這輪 1 人變動、跑完共 1 人', [r.ok, r.changes.access, r.seeAll], [true, 1, 1]);
+      eq('dry-run 不寫入 seeAll', dump(d).some((s) => s.seeAll), false);
+      r = await SD.runDzySync({ dir: d, bridge: bridgeOf(gotOk), fetchDir: fetch3 });
+      eq('正式同步也印：changes.access 1、seeAll 1', [r.ok, r.changes.access, r.seeAll], [true, 1, 1]);
+      r = await SD.runDzySync({ dir: d, bridge: bridgeOf(gotOk), fetchDir: fetch3 });
+      eq('第二輪：沒變動但總人數照印', [r.changes.access, r.seeAll], [0, 1]);
+      eq('只印人數，不印姓名或編號', typeof r.changes.access === 'number' && typeof r.seeAll === 'number', true);
+      setRows(dirOk);
+    }
     // ---- G3：姓名不一致不自動認領；人工認領清憑證 ----
     { const stf = [S0('S-001', '舊員工', 'mala', { src: 'gf:A1', pinHash: 'OLDPH', salt: 'SA', pinVer: 4, lineHash: H1, seeAll: true })];
       setRows([P('DZY001', '新員工', 'mala-gf', true, [['gf', 'A1']])]);
