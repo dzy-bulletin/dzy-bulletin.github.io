@@ -129,7 +129,7 @@ async function main() {
   eq('prod GET /__blob is 404', (await request(P.port, 'GET', '/__blob?id=x')).status, 404);
   eq('prod POST /__bridge and /__files (M7 test routes) are 404', [(await request(P.port, 'POST', '/__bridge', { op: 'filelist' })).status, (await request(P.port, 'POST', '/__files', {})).status], [404, 404]);
   { const h = await request(P.port, 'GET', '/health');
-    eq('health shape', Object.keys(h.json).sort(), ['announce', 'backup', 'bridge', 'disk', 'e2e', 'files', 'level', 'mirror', 'ok', 'remind', 'uptime', 'v', 'why']);
+    eq('health shape', Object.keys(h.json).sort(), ['announce', 'backup', 'bridge', 'disk', 'e2e', 'files', 'level', 'mirror', 'ok', 'punchRemind', 'remind', 'uptime', 'v', 'why']);
     eq('health prod values', [h.json.ok, h.json.e2e, h.json.bridge, h.json.mirror, h.json.backup, h.json.files, h.json.remind, typeof h.json.disk.freeMB], [true, false, 'missing', null, null, null, null, 'number']);
     eq('health level red when jobs never ran', [h.json.level, h.json.why.slice(0, 2)], ['red', ['沒有鏡像紀錄', '沒有快照紀錄']]);
     eq('response has Content-Length', Number(h.headers['content-length']) > 0, true); }

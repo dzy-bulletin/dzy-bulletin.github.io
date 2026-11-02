@@ -718,6 +718,33 @@ launchctl bootstrap "$U" "$HOME/Library/LaunchAgents/$J.plist" && launchctl prin
 
 **停用**：一般路線 `launchctl bootout "$U/com.dzy.bulletin.remind"; rm -f ~/Library/LaunchAgents/com.dzy.bulletin.remind.plist`；附錄 A 路線請 Eason `sudo launchctl bootout system/com.dzy.bulletin.remind; sudo rm -f /Library/LaunchDaemons/com.dzy.bulletin.remind.plist`。或只把 `.env` 兩行刪掉（job 照跑、印「尚未啟用」）。
 
+## 打卡公告提醒（選用，docs/punch-remind.md）
+
+做什麼：每 5 分鐘 `server/punch-remind-push.js` 唯讀查資料庫，算出每個綁了 LINE 的在職同仁「上架中、看得到、要簽、還沒簽」的公告（最多 3 則標題＋總則數），
+以 `lineHash` 為鍵整包送到**光復打卡 Apps Script**（action `line_hub_bulletin_put`）。同仁 LINE 打卡成功時，鼎兆元打卡機器人的回覆卡片就多一段「📢 還沒簽的公告」＋「去佈告欄簽名」按鈕（免費回覆，不推播）。
+沒有人要提醒也照送空的一包（機器人才會清掉簽完的人）。打卡機器人那邊超過 30 分鐘沒收到新資料就不再提醒。結果在 `$DATA/logs/punch-remind-last.json`（`at`、`ok`、`people`、`posts`、`bytes`、`trimmed`、`error`，只有數字）與 `$DATA/logs/punch-remind.log`。
+
+**順序**：光復打卡 Apps Script 先上 `line_hub_bulletin_put`（mala-clock-in `apps-script/LineHub.gs`）並設好 Script Property `BULLETIN_PUSH_KEY`，再做下面幾步。
+
+**1. 金鑰（Eason，不經 Claude）**：在 MacBook 終端機產一把 `openssl rand -hex 32 | pbcopy`，貼到光復打卡 Apps Script 的指令碼屬性 `BULLETIN_PUSH_KEY`；
+再到 Mac mini 用文字編輯器打開 `~/dzy-bulletin/server/.env`，最後加兩行後存檔：
+
+```
+PUNCH_REMIND_URL=<光復打卡 Apps Script 的 /exec 網址>
+PUNCH_REMIND_KEY=<上面那把金鑰>
+```
+
+Claude 只用這行確認兩個鍵都在（只印數量、不印值）：`grep -c '^PUNCH_REMIND_\(URL\|KEY\)=.' "$REPO/server/.env"`（期望 `2`）。沒設定時 job 只印「尚未啟用」並 exit 0，**可以先裝 plist、之後再貼鍵**。
+
+**2. `--dry-run`（不送出）**：`DATA_DIR="$DATA" node "$REPO/server/punch-remind-push.js" --dry-run` → 印「N 人有未簽公告、整包 X bytes」。
+
+**3. 安裝 plist**：同「未簽提醒」的 3a／3b，`J=com.dzy.bulletin.punchremind`。
+
+**4. 正式跑一次**：`DATA_DIR="$DATA" node "$REPO/server/punch-remind-push.js"` → `cat "$DATA/logs/punch-remind-last.json"` 要 `ok:true`。
+`/health` 會帶出 `punchRemind: { at, ok, people }`（沒裝＝`null`）；`ok:false` → 黃「打卡公告提醒送出失敗」（`error` 是 `打卡機器人拒收：unauthorized`＝金鑰兩邊不一樣；`too_big`＝人太多、整包超過上限）；超過 30 分鐘沒跑 → 黃「打卡公告提醒超過 30 分鐘沒跑」。
+
+**停用**：bootout `com.dzy.bulletin.punchremind`，機器人 30 分鐘後自動不提醒。刪掉光復打卡的 `BULLETIN_PUSH_KEY` 只會讓之後的送出被拒收，已經送到的資料一樣要等 30 分鐘才過期。
+
 ## 新公告上架通知（#28，沿用未簽提醒的 .env）
 
 做什麼：主管上架的公告若是**小辛辣光復同仁要簽的**（單位含小辛辣或「全部」），伺服器就經**光復小幫手**（訂貨小幫手 @954wknja）的 `push_text` 入口**直接 push** 到光復群組（吃小幫手每月額度）。額度快滿、被 429、或當天已 push 滿 5 則時，小幫手改走候補：群組有人說話才帶出，到隔天 06:00 沒人說話就作廢，作廢會經通知匣告知 Eason。訊息：

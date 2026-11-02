@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- 鼎兆元｜電子佈告欄 — 打卡公告提醒（server/punch-remind-push.js，選用，docs/punch-remind.md）：每 5 分鐘算一次未簽公告、送到光復打卡機器人。
+     server/.env 沒設 PUNCH_REMIND_URL／PUNCH_REMIND_KEY 時只印「尚未啟用」並 exit 0，裝了也不會連任何地方。
+     範本佔位字串同 com.dzy.bulletin.plist；安裝見 DEPLOY.md「打卡公告提醒（選用）」（附錄 A 路線改裝成 LaunchDaemon）。 -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.dzy.bulletin.punchremind</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__NODE__</string>
+    <string>__REPO__/server/punch-remind-push.js</string>
+  </array>
+  <key>WorkingDirectory</key><string>__REPO__</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>DATA_DIR</key><string>__DATA_DIR__</string>
+  </dict>
+  <key>StartInterval</key><integer>300</integer>
+  <key>StandardOutPath</key><string>__DATA_DIR__/logs/punchremind.out.log</string>
+  <key>StandardErrorPath</key><string>__DATA_DIR__/logs/punchremind.err.log</string>
+</dict>
+</plist>
