@@ -144,6 +144,17 @@ async function main() {
     eq('A3 超過 90KB 改每人只留 1 則', [bb.trimmed, bb.bytes <= P.MAX_BYTES, bb.payload.map[hash('B0')].titles.length, bb.payload.map[hash('B0')].n], [true, true, 1, 5]);
   }
 
+  // ===== A4 燈號 =====
+  {
+    const { judgeHealth } = require('../server/health-rules.js');
+    const now = Date.parse('2026-11-02T02:00:00Z'), ago = (min) => new Date(now - min * 60e3).toISOString();
+    const base = { mirror: { at: ago(60), ok: true, fails: 0 }, backup: { at: ago(60), ok: true }, disk: { freeMB: 50000 } };
+    const lv = (pr) => judgeHealth(Object.assign({}, base, { punchRemind: pr }), now);
+    eq('A4 null／剛跑過成功 → 綠', [lv(null).level, lv({ at: ago(4), ok: true, people: 3 }).level], ['green', 'green']);
+    eq('A4 失敗 → 黃', lv({ at: ago(4), ok: false, people: 0 }), { level: 'yellow', why: ['打卡公告提醒送出失敗'] });
+    eq('A4 超過 30 分鐘沒跑 → 黃', lv({ at: ago(31), ok: true, people: 0 }), { level: 'yellow', why: ['打卡公告提醒超過 30 分鐘沒跑'] });
+  }
+
   // ===== B runPush =====
   const h = await fakeExec();
   const KEY = 'K-test-key-0123456789abcdef0123456789';

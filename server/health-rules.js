@@ -9,6 +9,8 @@
  *       remind.ok=false（#26 光復未簽提醒最後一次送出失敗；remind 為 null＝沒裝或沒啟用、ok=true＝成功，都不影響燈號）
  *       announce.ok=false（#28 新公告通知最後一輪有失敗；announce 為 null＝沒啟用、ok=null＝第一輪還沒跑完，都不影響燈號）、
  *       announce.gaveup > 0（有公告連續失敗被放棄；持續黃燈直到 `node server/announce.js --retry` 清掉，#29 S1）
+ *       punchRemind.ok=false（打卡公告提醒最後一次送出失敗）、punchRemind.at 距今 > 30 分鐘（每 5 分鐘一輪的工作停了，機器人那邊 30 分鐘後就不再提醒）；
+ *       punchRemind 為 null＝沒裝或沒啟用，不影響燈號
  *   結果檔存在但讀不到（at 為 null）→ 紅「結果檔讀不到」，與「從沒跑過」分開寫。
  *   mirror.notMigrated（空庫、尚未搬遷，mirror.js 在本機拒絕）→ 黃「尚未搬遷」，蓋掉「鏡像連續失敗」與「超過 3 小時」兩個黃燈；
  *   **鏡像超過 6 小時沒跑的紅燈照判**（空庫時每輪照樣更新 at，at 變舊＝launchd 的 mirror 死了）。快照、磁碟、附件等其他規則照常。
@@ -17,7 +19,7 @@
 'use strict';
 
 const H = 3600e3;
-const RULES = { mirrorYellowH: 3, mirrorRedH: 6, backupRedH: 26, mirrorFailYellow: 2, diskYellowMB: 5000, pendingYellow: 200, futureMin: 5 };
+const RULES = { punchRemindStaleMin: 30, mirrorYellowH: 3, mirrorRedH: 6, backupRedH: 26, mirrorFailYellow: 2, diskYellowMB: 5000, pendingYellow: 200, futureMin: 5 };
 
 function judgeHealth(h, nowMs) {
   const now = nowMs || Date.now(), red = [], yellow = [];
@@ -42,6 +44,9 @@ function judgeHealth(h, nowMs) {
   if (h && h.remind && h.remind.ok === false) yellow.push('未簽提醒送出失敗');
   if (h && h.announce && h.announce.ok === false) yellow.push('新公告通知失敗');
   if (h && h.announce && Number(h.announce.gaveup) > 0) yellow.push('有新公告通知已放棄');
+  const pr = h && h.punchRemind;
+  if (pr && pr.ok === false) yellow.push('打卡公告提醒送出失敗');
+  else if (pr && age(pr.at) * 60 > RULES.punchRemindStaleMin) yellow.push('打卡公告提醒超過 30 分鐘沒跑');
   return { level: red.length ? 'red' : yellow.length ? 'yellow' : 'green', why: red.concat(yellow) };
 }
 
