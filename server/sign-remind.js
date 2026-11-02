@@ -141,4 +141,4 @@ async function main() {
 }
 
 if (require.main === module) main().catch((e) => { console.error(J.errText(e)); process.exit(1); });
-module.exports = { runRemind, pending, buildText, unsynced, daysBetween, LABEL, MAX_CHARS, UNSYNCED_TITLE };
+module.exports = { runRemind, pending, buildText, unsynced, daysBetween, loadData, LABEL, MAX_CHARS, UNSYNCED_TITLE };   // loadData 也給 punch-remind-push.js 用
