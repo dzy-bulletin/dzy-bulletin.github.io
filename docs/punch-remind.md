@@ -74,7 +74,7 @@ Eason 2026-11-02 拍板（確認單 1B 2A 3A 4A 5A）。同仁在 LINE 打卡成
 1. 光復打卡 Apps Script 先上 `line_hub_bulletin_put`＋卡片段落（還沒有資料時什麼都不顯示＝對同仁零影響）。設 Script Property `BULLETIN_PUSH_KEY`。
 2. 佈告欄 Mac mini：合併本分支、填 `.env` 兩個值、裝 launchd、`--dry-run` 看人數、再正式跑一次。
 3. 自己綁 LINE 的帳號在有未簽公告時打一次卡，看卡片；簽完等 5 分鐘再打一次，提醒要消失。
-回退：mini `launchctl bootout` 那支工作（30 分鐘後機器人自動不提醒）；或刪光復 `BULLETIN_PUSH_KEY`（立即拒收）。
+回退：mini `launchctl bootout` 那支工作，30 分鐘後機器人自動不提醒；刪光復 `BULLETIN_PUSH_KEY` 只擋之後的送出，已送到的資料同樣 30 分鐘後過期。要立刻停：光復打卡 redeploy 回前一版。
 
 ## 測試
 - 佈告欄：`test/punch-remind.test.js`：每種單位 × seeAll × mustSign × 已讀／未讀 × 狀態（on／plan／off）× 沒 lineHash；排序、3 則上限、標題截斷、90KB 裁切；`--dry-run` 不送、不寫 last。
