@@ -741,7 +741,7 @@ Claude 只用這行確認兩個鍵都在（只印數量、不印值）：`grep -
 **3. 安裝 plist**：同「未簽提醒」的 3a／3b，`J=com.dzy.bulletin.punchremind`。
 
 **4. 正式跑一次**：`DATA_DIR="$DATA" node "$REPO/server/punch-remind-push.js"` → `cat "$DATA/logs/punch-remind-last.json"` 要 `ok:true`。
-`/health` 會帶出 `punchRemind: { at, ok, people }`（沒裝＝`null`）；`ok:false` → 黃「打卡公告提醒送出失敗」（`error` 是 `小幫手拒收：unauthorized`＝金鑰兩邊不一樣；錯誤字句沿用 job-common 的「小幫手」字樣，實際對象是光復打卡）；超過 30 分鐘沒跑 → 黃「打卡公告提醒超過 30 分鐘沒跑」。
+`/health` 會帶出 `punchRemind: { at, ok, people }`（沒裝＝`null`）；`ok:false` → 黃「打卡公告提醒送出失敗」（`error` 是 `打卡機器人拒收：unauthorized`＝金鑰兩邊不一樣；`too_big`＝人太多、整包超過上限）；超過 30 分鐘沒跑 → 黃「打卡公告提醒超過 30 分鐘沒跑」。
 
 **停用**：bootout `com.dzy.bulletin.punchremind`，機器人 30 分鐘後自動不提醒。刪掉光復打卡的 `BULLETIN_PUSH_KEY` 只會讓之後的送出被拒收，已經送到的資料一樣要等 30 分鐘才過期。
 

@@ -56,13 +56,12 @@ function collect(data, td) {
   return { map: out, posts: used };
 }
 
-// 送出的 body；超過 MAX_BYTES 先改每人只留第 1 則標題，仍超過就只留則數
+// 送出的 body；超過 MAX_BYTES 改每人只留第 1 則標題。仍超過就照送，機器人回 too_big → ok:false、/health 黃燈（不偷偷送空的）
 function buildPayload(map, at, key) {
   const make = (m) => { const payload = { action: 'line_hub_bulletin_put', key, at, v: 1, map: m }; return { payload, bytes: Buffer.byteLength(JSON.stringify(payload), 'utf8') }; };
   let r = make(map), trimmed = false;
-  for (const keep of [1, 0]) {
-    if (r.bytes <= MAX_BYTES) break;
-    const m = {}; Object.keys(map).forEach((h) => { m[h] = { n: map[h].n, titles: map[h].titles.slice(0, keep) }; });
+  if (r.bytes > MAX_BYTES) {
+    const m = {}; Object.keys(map).forEach((h) => { m[h] = { n: map[h].n, titles: map[h].titles.slice(0, 1) }; });
     r = make(m); trimmed = true;
   }
   return { payload: r.payload, bytes: r.bytes, trimmed };
@@ -95,7 +94,7 @@ async function runPush(o) {
     try {
       await J.postHelperRetry(o.url, b.payload, { retryMs: o.retryMs, onRetry: (m) => J.logLine(dir, LOG, m) });
       res.ok = true;
-    } catch (e) { res.error = J.errText(e); }
+    } catch (e) { res.error = J.errText(e).replace(/小幫手/g, '打卡機器人'); }   // job-common 的字句寫的是小幫手，這支送的是光復打卡
     J.writeLast(dir, LAST, res);
     J.logLine(dir, LOG, (res.ok ? '已送到打卡機器人' : '送出失敗') + `：${res.people} 人、${res.bytes} bytes` + (res.trimmed ? '（已裁切）' : '') + (res.ok ? '' : '；' + res.error));
     return res;

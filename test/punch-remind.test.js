@@ -175,6 +175,7 @@ async function main() {
     h.mode = 'reject'; h.hits = 0;
     const r = await P.runPush({ dir, url: h.url, key: KEY, now: NOW, retryMs: 0 });
     eq('B2 拒收：ok false、不重試', [r.ok, h.hits, JSON.parse(fs.readFileSync(lastFile(dir), 'utf8')).ok], [false, 1, false]);
+    eq('B2 錯誤字句寫打卡機器人', /打卡機器人/.test(r.error) && !/小幫手/.test(r.error), true);
     h.mode = 'drop'; h.hits = 0;
     const r2 = await P.runPush({ dir, url: h.url, key: KEY, now: NOW, retryMs: 0 });
     eq('B2 斷線重試一次後失敗', [r2.ok, h.hits], [false, 2]);

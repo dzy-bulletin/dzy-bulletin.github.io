@@ -9,7 +9,7 @@
  *       remind.ok=false（#26 光復未簽提醒最後一次送出失敗；remind 為 null＝沒裝或沒啟用、ok=true＝成功，都不影響燈號）
  *       announce.ok=false（#28 新公告通知最後一輪有失敗；announce 為 null＝沒啟用、ok=null＝第一輪還沒跑完，都不影響燈號）、
  *       announce.gaveup > 0（有公告連續失敗被放棄；持續黃燈直到 `node server/announce.js --retry` 清掉，#29 S1）
- *       punchRemind.ok=false（打卡公告提醒最後一次送出失敗）、punchRemind.at 距今 > 30 分鐘（每 5 分鐘一輪的工作停了，機器人那邊 30 分鐘後就不再提醒）；
+ *       punchRemind.ok=false（打卡公告提醒最後一次送出失敗）、punchRemind.at（最後一次執行，失敗另由 ok=false 亮燈）距今 > 30 分鐘（每 5 分鐘一輪的工作停了，機器人那邊 30 分鐘後就不再提醒）；
  *       punchRemind 為 null＝沒裝或沒啟用，不影響燈號
  *   結果檔存在但讀不到（at 為 null）→ 紅「結果檔讀不到」，與「從沒跑過」分開寫。
  *   mirror.notMigrated（空庫、尚未搬遷，mirror.js 在本機拒絕）→ 黃「尚未搬遷」，蓋掉「鏡像連續失敗」與「超過 3 小時」兩個黃燈；
