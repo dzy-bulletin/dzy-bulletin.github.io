@@ -734,7 +734,7 @@ PUNCH_REMIND_URL=<光復打卡 Apps Script 的 /exec 網址>
 PUNCH_REMIND_KEY=<上面那把金鑰>
 ```
 
-Claude 只用這行確認兩個鍵都在（只印數量、不印值）：`grep -c '^PUNCH_REMIND_\(URL\|KEY\)=.' "$REPO/server/.env"`（期望 `2`）。沒設定時 job 只印「尚未啟用」並 exit 0，**可以先裝 plist、之後再貼鍵**。
+確認兩個鍵都在（只印數量、不印值；照本手冊開頭的規定，提到 `server/.env` 的檢查由 Eason 在自己的終端機跑、回報數字）：`grep -c '^PUNCH_REMIND_\(URL\|KEY\)=.' ~/dzy-bulletin/server/.env`（期望 `2`）。沒設定時 job 只印「尚未啟用」並 exit 0，**可以先裝 plist、之後再貼鍵**。
 
 **2. `--dry-run`（不送出）**：`DATA_DIR="$DATA" node "$REPO/server/punch-remind-push.js" --dry-run` → 印「N 人有未簽公告、整包 X bytes」。
 
