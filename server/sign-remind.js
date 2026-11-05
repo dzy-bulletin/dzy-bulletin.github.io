@@ -31,7 +31,7 @@ const LAST = 'remind-last.json', LOG = 'remind.log';
 const LABEL = '佈告欄未簽提醒';
 const MIN_DAYS = 3;
 const MAX_CHARS = 4500;                                     // 小幫手寫入候補時截 5000 字（text.slice(0, 5000)），留餘裕
-const SITE = 'https://dzy-bulletin.github.io';
+const SITE = 'https://dzy.mozhuting.com/#/bulletin';          // 2026-11-05 改連管理系統公告專區（嵌本站，簽名寫回同一份資料）
 const SRC_PREFIX = 'gf:';                                   // gf＝小辛辣光復（cf＝央廚、js＝墨竹亭金山）
 
 // 日期差（兩個 YYYY-MM-DD，以 UTC 午夜計，不受夏令時間影響；台灣也沒有）
@@ -66,7 +66,7 @@ function pending(data, td) {
 //   以碼點（Array.from）為單位累加，不切出孤立代理字元（emoji 是兩個 UTF-16 單位）；長度仍以 UTF-16 單位（String.length）計，
 //   與小幫手 text.slice(0, 5000) 的算法一致。切點往回退到最後一個「、」或換行之前，不切斷姓名、尾端不留「、」。
 function buildText(groups) {
-  const head = '📋 佈告欄未簽提醒', foot = `請到 ${SITE} 簽名，謝謝！`, more = '…等';
+  const head = '📋 佈告欄未簽提醒', foot = `請到管理系統公告專區 ${SITE} 簽名，謝謝！`, more = '…等';
   const body = groups.map((g) => `《${g.title}》上架 ${g.days} 天：${g.names.join('、')}`).join('\n');
   const full = head + '\n' + body + '\n' + foot;
   if (full.length <= MAX_CHARS) return full;

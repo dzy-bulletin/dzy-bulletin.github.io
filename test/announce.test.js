@@ -95,18 +95,18 @@ async function main() {
   const h = await fakeHelper();
   try {
     // ---- A1 訊息格式、標題 200 字（以碼點計）----
-    eq('A1 訊息格式', A.buildText('  十月排班  '), '📢 佈告欄新公告\n《十月排班》\n請到 https://dzy-bulletin.github.io 閱讀並簽名');
+    eq('A1 訊息格式', A.buildText('  十月排班  '), '📢 佈告欄新公告\n《十月排班》\n請到管理系統公告專區 https://dzy.mozhuting.com/#/bulletin 閱讀並簽名');
     const long = '😀'.repeat(250);
-    eq('A1 標題全 emoji：受 340 個 UTF-16 單位限制（170 個 emoji、不切半）', Array.from(A.buildText(long).split('\n')[1]).length, 172);
+    eq('A1 標題全 emoji：受 330 個 UTF-16 單位限制（165 個 emoji、不切半）', Array.from(A.buildText(long).split('\n')[1]).length, 167);
     eq('A1 標題中文：截 200 個字', Array.from(A.buildText('字'.repeat(250)).split('\n')[1]).length, 202);
     // 小幫手 GAS 的嚴格格式（與 ~/mala-gas/line-oa-scheduler/程式碼.js 的 PUSH_TEXT_RE／PUSH_TITLE_BAD 相同；第 2 輪審查 R1）
-    const GAS_RE = /^📢 佈告欄新公告\n《([^\r\n]*)》\n請到 https:\/\/dzy-bulletin\.github\.io 閱讀並簽名$/, GAS_BAD = /http|:\/\/|www\./i;
+    const GAS_RE = /^📢 佈告欄新公告\n《([^\r\n]*)》\n請到(?: https:\/\/dzy-bulletin\.github\.io|管理系統公告專區 https:\/\/dzy\.mozhuting\.com\/#\/bulletin) 閱讀並簽名$/, GAS_BAD = /http|:\/\/|www\./i;
     const gasOk = (t) => { const m = GAS_RE.exec(t); return !!m && !GAS_BAD.test(m[1]) && t.length <= 400; };
     const nasty = ['第一行\n第二行', 'a\r\nb\u2028c', '點 https://evil.example/login 領獎', '到 dzy-bulletin.github.io.evil.example', 'HTTP://X.COM',
       'www.evil.example', 'ftp://x', 'hTTps', '《書名號》與 emoji 😀', '😀'.repeat(250), '字'.repeat(250), '', '   '];
     eq('A1 各種標題清理後都符合小幫手格式', nasty.filter((t) => !gasOk(A.buildText(t))), []);
     eq('A1 換行改空白、網址改全形', A.buildText('a\nb https://x.y www.z').split('\n')[1], '《a b ｈｔｔｐｓ：／／x.y ｗｗｗ．z》');
-    eq('A1 一般標題不變', A.buildText('十月排班 10/1 起'), '📢 佈告欄新公告\n《十月排班 10/1 起》\n請到 https://dzy-bulletin.github.io 閱讀並簽名');
+    eq('A1 一般標題不變', A.buildText('十月排班 10/1 起'), '📢 佈告欄新公告\n《十月排班 10/1 起》\n請到管理系統公告專區 https://dzy.mozhuting.com/#/bulletin 閱讀並簽名');
     eq('A1 常數：每小時、3 次', [A.ANNOUNCE_EVERY_MS, A.MAX_FAILS], [3600000, 3]);
 
     // ---- A2 首次啟用：現有公告（排定未來的除外）標記已通知、不補推；印出那一行 ----

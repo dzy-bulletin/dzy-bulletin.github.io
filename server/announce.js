@@ -38,7 +38,7 @@ const MAX_FAILS = 3;                                        // 每小時一輪�
 const FAIL_GAP_MS = 50 * 60e3;                              // 距上次失敗不到 50 分鐘不累加（重啟、崩潰重起）
 const OK_MODES = new Set(['push', 'fallback', 'dup']);
 const MAX_TITLE = 200;
-const SITE = 'https://dzy-bulletin.github.io';
+const SITE = 'https://dzy.mozhuting.com/#/bulletin';          // 2026-11-05 改連管理系統公告專區（小幫手 @20 起新舊都收）
 const LABEL_PREFIX = '佈告欄新公告:';
 const KV_DONE = 'announced', KV_FAILS = 'announceFails';
 const LAST = 'announce-last.json', LOG = 'announce.log';
@@ -52,12 +52,12 @@ function cleanTitle(title) {
     .trim();
 }
 // 訊息本文（標題清理後以碼點截 200 字，不切出孤立代理字元）
-//   另限 UTF-16 長度 MAX_TITLE_UNITS，整則一定 ≤ 小幫手的 400 字上限（固定文字 51 字）
-const MAX_TITLE_UNITS = 340;
+//   另限 UTF-16 長度 MAX_TITLE_UNITS，整則一定 ≤ 小幫手的 400 字上限（固定文字 65 字）
+const MAX_TITLE_UNITS = 330;
 function buildText(title) {
   let t = '', n = 0;
   for (const c of Array.from(cleanTitle(title))) { if (n >= MAX_TITLE || t.length + c.length > MAX_TITLE_UNITS) break; t += c; n++; }
-  return `📢 佈告欄新公告\n《${t}》\n請到 ${SITE} 閱讀並簽名`;
+  return `📢 佈告欄新公告\n《${t}》\n請到管理系統公告專區 ${SITE} 閱讀並簽名`;
 }
 // 這則公告該不該通知（不看是否已通知）
 const eligible = (p, td) => L.status(p, td).state === 'on' && L.mustSign('mala', p);
