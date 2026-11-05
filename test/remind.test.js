@@ -107,7 +107,7 @@ async function main() {
     eq('A1 action／label／token', [b.action, b.label, b.token], ['enqueue_text', LABEL, 'T-test']);
     eq('A1 label 固定', LABEL, '佈告欄未簽提醒');
     // 只挑 gf:、active；已簽不列；下架／到期／未上架／不滿 3 天／不必簽的單位都不列；依公告分組（sortBoard：上架日新到舊）
-    eq('A1 訊息', b.text, '📋 佈告欄未簽提醒\n《十月排班》上架 3 天：張羽成、蕭妏芳\n《衛生稽核》上架 5 天：張羽成\n請到 https://dzy-bulletin.github.io 簽名，謝謝！');
+    eq('A1 訊息', b.text, '📋 佈告欄未簽提醒\n《十月排班》上架 3 天：張羽成、蕭妏芳\n《衛生稽核》上架 5 天：張羽成\n請到管理系統公告專區 https://dzy.mozhuting.com/#/bulletin 簽名，謝謝！');
     eq('A1 結果檔', (({ ok, people, posts, queued }) => ({ ok, people, posts, queued }))(last(dir)), { ok: true, people: 3, posts: 2, queued: 1 });
     eq('A1 結果檔有 at', typeof last(dir).at, 'string');
     // 同一天重跑：一樣送（label 相同），由小幫手判重 → queued 0、仍 ok
@@ -167,7 +167,7 @@ async function main() {
   // ===== A5 長度上限：超過就截斷並加「…等」，網址留著；不切斷姓名、不切出孤立代理字元、截斷後要接近上限（#27 S1／S3） =====
   {
     const LONE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
-    const TAIL = /…等\n請到 https:\/\/dzy-bulletin\.github\.io 簽名，謝謝！$/;
+    const TAIL = /…等\n請到管理系統公告專區 https:\/\/dzy\.mozhuting\.com\/#\/bulletin 簽名，謝謝！$/;
     const lastName = (t) => { const m = /([^、：\n]*)…等\n/.exec(t); return m ? m[1] : null; };
     const check = (tag, groups) => {
       const t = buildText(groups), all = new Set([].concat(...groups.map((g) => g.names)));
@@ -183,7 +183,7 @@ async function main() {
       check('A5 emoji pad' + pad, [{ title: '🎉中秋公告😀' + 'x'.repeat(pad), days: 4, names: Array.from({ length: 1500 }, (_, i) => '😀' + ['甲', '乙乙', '丙丙丙'][i % 3] + i) }]);
     }
     // 切點恰好落在姓名中間：算好前綴，讓第一個不放得下的名字跨過切點
-    { const head = '📋 佈告欄未簽提醒', foot = '請到 https://dzy-bulletin.github.io 簽名，謝謝！';
+    { const head = '📋 佈告欄未簽提醒', foot = '請到管理系統公告專區 https://dzy.mozhuting.com/#/bulletin 簽名，謝謝！';
       const room = MAX_CHARS - head.length - foot.length - 2 - 2;
       const pre = '《t》上架 3 天：', names = [];
       let len = pre.length;
@@ -197,7 +197,7 @@ async function main() {
     { const t = buildText([{ title: 'A', days: 3, names: Array.from({ length: 1000 }, (_, i) => '甲' + i) }, { title: '第二則很長的標題'.repeat(5), days: 9, names: ['乙'] }]);
       eq('A5 不留半截標題', [/第二則/.test(t), /《[^》\n]*…等/.test(t)], [false, false]); }
     // 第一則剛好放得下、切點落在第二則的標題前綴裡 → 退回第一則行尾（換行），第一則的最後一個名字要留著
-    { const head = '📋 佈告欄未簽提醒', foot = '請到 https://dzy-bulletin.github.io 簽名，謝謝！';
+    { const head = '📋 佈告欄未簽提醒', foot = '請到管理系統公告專區 https://dzy.mozhuting.com/#/bulletin 簽名，謝謝！';
       const room = MAX_CHARS - head.length - foot.length - 2 - 2, pre = '《A》上架 3 天：', names = [];
       let len = pre.length;
       for (let i = 0; len + 6 < room - 10; i++) { const n = '名' + String(i).padStart(4, '0'); names.push(n); len += n.length + (i ? 1 : 0); }
