@@ -31,6 +31,7 @@ var Staff = (function () {
     if (embedDzy()) {
       // 2026-10-20：嵌在管理系統裡不顯示自己的藍色標題列；「公告／歷史區」改由管理系統頁頂分頁列切換（css .embed-dzy）
       document.body.classList.add('embed-dzy');
+      if (/(?:^|[?&])ui=new(?:&|#|$)/.test(location.search)) document.body.classList.add('ui-new');   // 管理系統新外觀（2026-11-16，css 最後一段）
       listenNav();
       // 管理系統「公告管理／新增公告」分頁（?embed=dzy&view=posts|new）：換管理憑證，整頁就是設定畫面
       var av = new URLSearchParams(location.search).get('view');
