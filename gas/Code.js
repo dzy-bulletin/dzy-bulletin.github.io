@@ -3,7 +3,7 @@
 'use strict';
 
 var WRITE_ACTIONS_ = ['setPin', 'login', 'ack', 'adminLogin', 'savePost', 'setPublished', 'setPinned', 'staffAdd', 'staffDelete', 'staffResetPin', 'staffIssueCode', 'syncClock', 'staffSetStore', 'lineLogin', 'dzyLogin', 'dzyAdminLogin'];   // 必須與 Service.WRITE_ACTIONS 一致（test 檢查）
-var VERSION_ = '0.8.1';
+var VERSION_ = '0.8.3';
 // 後端搬 Mac mini（#5、#7）：指令碼屬性 PRIMARY＝gas（現況）／mini（已切到 Mac mini）。
 // mini 時寫入一律回 MOVED、讀取照常：還沒重新整理的舊頁面能看、不能寫（避免切換期雙寫）。uploadFile 也擋（與 Mac mini 的 READONLY 同步，免得留孤兒附件）。
 // 只有寫入動作才讀 PRIMARY（讀取動作零成本、PRIMARY 沒設時與改版前完全一樣）；寫入在拿到鎖之後再確認一次（等鎖期間才切 mini 也擋得住）。
@@ -11,6 +11,8 @@ var MOVED_ = { ok: false, code: 'MOVED', message: '系統已搬家，請重新�
 function isMini_(v) { return String(v == null ? '' : v).trim().toLowerCase() === 'mini'; }   // 'mini '／'Mini' 手滑也算
 function gated_(action) { return WRITE_ACTIONS_.indexOf(action) >= 0 || action === 'uploadFile'; }
 function movedGate_(action, primary) { return gated_(action) && isMini_(primary) ? MOVED_ : null; }
+// 服務層選項：管理通行碼登入預設停用（2026-11-18）；只有指令碼屬性 ADMIN_PASSCODE_LOGIN 明確設成 '1' 才開（回退到 Google 後的緊急用，風險見 server/ROLLBACK.md）
+function serviceOpts_() { return { adminPasscode: PropertiesService.getScriptProperties().getProperty('ADMIN_PASSCODE_LOGIN') === '1' }; }
 function primary_() { return PropertiesService.getScriptProperties().getProperty('PRIMARY'); }
 
 function doGet() {
@@ -29,7 +31,7 @@ function doPost(e) {
     var build = function () {
       var files = makeFiles_();
       return makeService_(DZYB, makeStore_(files), files, makeAuth_(gasCrypto_(), DZYB),
-        { nowMs: function () { return Date.now(); }, today: function () { return DZYB.today(); } }, clockSource_(), lineVerify_());
+        { nowMs: function () { return Date.now(); }, today: function () { return DZYB.today(); } }, clockSource_(), lineVerify_(), serviceOpts_());
     };
     if (action === 'roster') {                                    // 名單結果快取：命中時連 store／service 都不建（世代換了自動失效）
       var ck = 'roster:' + (PropertiesService.getScriptProperties().getProperty('DATA_GEN') || '0'), hit = null;

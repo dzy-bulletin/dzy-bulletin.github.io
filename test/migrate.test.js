@@ -69,7 +69,7 @@ async function main() {
   const FG = makeFakeGas();
   const URL0 = await FG.listen();
   const KEY = 'k'.repeat(40), SECRET = 'test-secret-migrate-0123456789';   // 測試用假值（非正式）
-  Object.assign(FG.props, { BRIDGE_KEY: KEY, PRIMARY: 'gas', TOKEN_SECRET: SECRET, ADMIN_INIT: 'admin-pass-99' });
+  Object.assign(FG.props, { BRIDGE_KEY: KEY, PRIMARY: 'gas', TOKEN_SECRET: SECRET, ADMIN_INIT: 'admin-pass-99', ADMIN_PASSCODE_LOGIN: '1' });   // GAS 回退版預設停用通行碼；本測試驗搬遷帶過來的通行碼雜湊，所以明確打開
   const doPost = (b) => JSON.parse(FG.G.doPost({ postData: { contents: JSON.stringify(b) } }).getContent());
   const atoken = doPost({ action: 'adminLogin', pass: 'admin-pass-99' }).data.atoken;
   const today = FG.G.DZYB.today();

@@ -11,6 +11,7 @@
  *       announce.gaveup > 0（有公告連續失敗被放棄；持續黃燈直到 `node server/announce.js --retry` 清掉，#29 S1）
  *       punchRemind.ok=false（打卡公告提醒最後一次送出失敗）、punchRemind.at（最後一次執行，失敗另由 ok=false 亮燈）距今 > 30 分鐘（每 5 分鐘一輪的工作停了，機器人那邊 30 分鐘後就不再提醒）；
  *       punchRemind 為 null＝沒裝或沒啟用，不影響燈號
+ *       adminPasscode.on=true 且非 E2E（管理通行碼登入被退回開關打開，正常應為停用；只是提醒，不影響 ok／e2e／bridge）
  *   結果檔存在但讀不到（at 為 null）→ 紅「結果檔讀不到」，與「從沒跑過」分開寫。
  *   mirror.notMigrated（空庫、尚未搬遷，mirror.js 在本機拒絕）→ 黃「尚未搬遷」，蓋掉「鏡像連續失敗」與「超過 3 小時」兩個黃燈；
  *   **鏡像超過 6 小時沒跑的紅燈照判**（空庫時每輪照樣更新 at，at 變舊＝launchd 的 mirror 死了）。快照、磁碟、附件等其他規則照常。
@@ -44,6 +45,7 @@ function judgeHealth(h, nowMs) {
   if (h && h.remind && h.remind.ok === false) yellow.push('未簽提醒送出失敗');
   if (h && h.announce && h.announce.ok === false) yellow.push('新公告通知失敗');
   if (h && h.announce && Number(h.announce.gaveup) > 0) yellow.push('有新公告通知已放棄');
+  if (h && h.adminPasscode && h.adminPasscode.on === true && !h.e2e) yellow.push('管理通行碼登入已開啟（應為停用）');   // 2026-11-18：退回開關被打開；E2E 測試模式預設開，不算
   const pr = h && h.punchRemind;
   if (pr && pr.ok === false) yellow.push('打卡公告提醒送出失敗');
   else if (pr && age(pr.at) * 60 > RULES.punchRemindStaleMin) yellow.push('打卡公告提醒超過 30 分鐘沒跑');

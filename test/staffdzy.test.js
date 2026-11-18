@@ -5,7 +5,7 @@ const fs = require('fs'), os = require('os'), path = require('path'), http = req
 const { spawn } = require('child_process');
 const L = require('../js/logic.js');
 const { makeAuth_ } = require('../gas/Auth.js');
-const { makeService_ } = require('../gas/Service.js');
+const makeService_ = ((mk) => (L, st, f, a, c, cs, lv, o) => mk(L, st, f, a, c, cs, lv, Object.assign({ adminPasscode: true }, o)))(require('../gas/Service.js').makeService_);   // 服務層預設停用通行碼；這支測試要用通行碼，明確傳 true
 const { makeSqliteStore } = require('../server/store-sqlite.js');
 const { runMirror, exitCode } = require('../server/mirror.js');
 const SD = require('../server/staff-dzy.js');

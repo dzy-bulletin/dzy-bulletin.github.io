@@ -145,7 +145,12 @@ function makeApp(cfg) {
   const ts = () => new Date().toISOString();
   // 同仁名單來源：STAFF_SOURCE=dzy 而且搬家腳本通過（kv 旗標）才算 dzy，否則一律 clock（今天行為）。回退＝改回 clock、重啟
   const staffSource = () => effectiveSource(cfg, (k) => store.kvGet(k));
-  const passcodeOn = () => cfg.ADMIN_PASSCODE || fs.existsSync(path.join(DATA_DIR, 'ADMIN_PASSCODE_ON'));   // 每個請求都看：建／刪檔立即生效
+  // 通行碼登入開著的原因：'env'（.env／測試設定）｜'file'（資料夾有「一般檔案」ADMIN_PASSCODE_ON，目錄不算）｜null（停用）。每個請求都看：建／刪檔立即生效
+  const passcodeVia = () => {
+    if (cfg.ADMIN_PASSCODE) return 'env';
+    try { return fs.statSync(path.join(DATA_DIR, 'ADMIN_PASSCODE_ON')).isFile() ? 'file' : null; } catch (e) { return null; }
+  };
+  const passcodeOn = () => !!passcodeVia();
   { const w = sourceWarning(cfg, (k) => store.kvGet(k)); if (w) console.error(ts() + ' ' + w); }
 
   // ---- 雲端空間：請求路徑只讀 kv 快取，背景每 10 分鐘刷新（請求永遠不碰 Google）----
@@ -347,6 +352,8 @@ function makeApp(cfg) {
       punchRemind: job('punch-remind-last.json', (j) => ({ at: j.at || null, ok: !!j.ok, people: num(j.people) })),
       // #28 新公告上架通知（server/announce.js，伺服器內計時器）：null＝沒啟用（.env 沒設或 E2E）；啟用但第一輪還沒跑完＝四欄 null。最後一輪失敗、或有放棄的（gaveup>0）→ 黃
       announce: announcer ? (announcer.health() || { at: null, ok: null, pending: null, gaveup: null }) : null,
+      // 管理通行碼登入（2026-11-18 起應為停用）：on＝開著（env／file 是原因）。開著且不是 E2E → 黃燈（health-rules.js），提醒有人用退回開關開了它
+      adminPasscode: { on: passcodeOn(), via: passcodeVia() },
       disk: { freeMB }
     };
     return Object.assign(h, judgeHealth(h, Date.now()));
@@ -444,7 +451,7 @@ function makeApp(cfg) {
   }
 
   return {
-    handle, store, refreshQuota, bridgeReady, VERSION, startAnnounce,
+    handle, store, refreshQuota, bridgeReady, VERSION, startAnnounce, passcodeVia,
     onRequest: (req, res) => { handle(req, res).catch((e) => { console.error(e); try { send(res, 500, { ok: false, code: 'SERVER', message: '系統忙碌' }, true); } catch (x) {} }); }
   };
 }
@@ -464,6 +471,7 @@ function main() {
   server
     .listen(cfg.PORT, '127.0.0.1', () => {
       console.log(new Date().toISOString() + ` 佈告欄伺服器 v${app.VERSION} 啟動：127.0.0.1:${cfg.PORT}，資料 ${cfg.DATA_DIR}${cfg.E2E ? '（E2E 測試模式）' : ''}`);
+      console.log(new Date().toISOString() + ' 管理通行碼登入：' + (app.passcodeVia() ? '【開啟】（原因：' + app.passcodeVia() + (cfg.E2E ? '，E2E 測試模式' : '，應為停用，請確認是不是緊急退回') + '）' : '停用（公告管理只走管理系統）'));
       app.startAnnounce(process.env);                       // #28：啟動時先跑一次，之後每小時（ANNOUNCE_EVERY_MS）
     });
 }
