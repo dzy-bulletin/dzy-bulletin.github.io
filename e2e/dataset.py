@@ -11,7 +11,7 @@ UNITS = ['mzt', 'mala', 'cf']                       # C1：公告單位，順序
 UNIT_NAME = {'mzt': '墨竹亭', 'mala': '小辛辣', 'cf': '央廚'}
 STAFF_UNITS = UNITS + ['hq-dzy', 'hq-mzt', 'hq-mala']  # C15
 STAFF_UNIT_NAME = dict(UNIT_NAME, **{'hq-dzy': '總部鼎兆元', 'hq-mzt': '總部墨竹亭', 'hq-mala': '總部小辛辣'})
-STORES = {'mzt': ['光復', '金山', '六張犁']}   # C16
+STORES = {'mzt': ['光復', '金山', '六張犁', '瑞光', '文心']}   # C16（與 js/logic.js 的 STORES 同步；2026-11-18 加瑞光、文心）
 HQ_BRAND = {'hq-mzt': 'mzt', 'hq-mala': 'mala'}
 
 SURNAMES = list('陳林黃張李王吳劉蔡楊許鄭謝郭洪曾邱廖賴周徐蘇葉莊呂江何蕭羅高潘簡朱鍾游彭詹胡施沈余盧梁趙顏柯翁魏孫戴')

@@ -164,9 +164,10 @@ var Staff = (function () {
       var list = people.filter(function (s) { return grp(s.unit) === cur; }), stores = L.STORES[cur] || null, body;
       if (stores && !curStore) {
         var extra = list.some(function (s) { return stores.indexOf(s.store) < 0; }) ? ['未分店'] : [];
-        body = '<div class="hint" style="margin:0 0 6px">請先選門市</div><div class="picklist">' + stores.concat(extra).map(function (st) {
-          var n = list.filter(function (s) { return (stores.indexOf(s.store) < 0 ? '未分店' : s.store) === st; }).length;
-          return '<button data-ps="' + esc(st) + '">' + esc(st) + '<br><small style="color:var(--sub);font-weight:400">' + n + ' 人</small></button>';
+        // 0 人的門市不列（2026-11-18：新開的瑞光、文心在人資建檔前沒有人，列出來只會點進一張空名單）
+        var cnt = function (st) { return list.filter(function (s) { return (stores.indexOf(s.store) < 0 ? '未分店' : s.store) === st; }).length; };
+        body = '<div class="hint" style="margin:0 0 6px">請先選門市</div><div class="picklist">' + stores.concat(extra).filter(function (st) { return cnt(st) > 0; }).map(function (st) {
+          return '<button data-ps="' + esc(st) + '">' + esc(st) + '<br><small style="color:var(--sub);font-weight:400">' + cnt(st) + ' 人</small></button>';
         }).join('') + '</div>';
       } else {
         if (stores) list = list.filter(function (s) { return (stores.indexOf(s.store) < 0 ? '未分店' : s.store) === curStore; });
