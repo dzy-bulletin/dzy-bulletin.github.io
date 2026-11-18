@@ -25,7 +25,7 @@ var DZYB = (function () {
   STAFF_UNITS.forEach(function (u) { STAFF_UNIT_NAME[u.id] = u.name; });
   var HQ_BRAND = { 'hq-mzt': 'mzt', 'hq-mala': 'mala' };
   // C16 門市（選名字時先選門市再出名字；2026-09-30 Eason 指定只有墨竹亭分門市）
-  var STORES = { mzt: ['光復', '金山', '六張犁'] };
+  var STORES = { mzt: ['光復', '金山', '六張犁', '瑞光', '文心'] };
 
   var MAX_FILES = 5;
   var MAX_BYTES = 20 * 1024 * 1024;

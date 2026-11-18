@@ -40,7 +40,10 @@ eq('對照：佈告欄來源代號 → 管理系統 store_code', SD.STORE_OF_SRC
 eq('對照：反向查表一一對應', Object.keys(SD.STORE_OF_SRC).every((k) => SD.SRC_OF_STORE[SD.STORE_OF_SRC[k]] === k) && Object.keys(SD.SRC_OF_STORE).length === 6, true);
 eq('對照：管理系統六家店 gf／mztjs／mztgf／mztlzl／hq／cf 都有對到', ['gf', 'mztjs', 'mztgf', 'mztlzl', 'hq', 'cf'].map((s) => !!SD.SRC_OF_STORE[s]), [true, true, true, true, true, true]);
 eq('對照：clockKeyOfSrc', [SD.clockKeyOfSrc('js:J1'), SD.clockKeyOfSrc('mgf:G01'), SD.clockKeyOfSrc('xx:1'), SD.clockKeyOfSrc(''), SD.clockKeyOfSrc('gf:')], ['mztjs:J1', 'mztgf:G01', '', '', '']);
-eq('對照：單位代碼', Object.keys(SD.UNIT_OF_DZY).sort(), ['ck', 'dzy-hq', 'mala-gf', 'mala-hq', 'mzt-gf', 'mzt-hq', 'mzt-js', 'mzt-lzl']);
+eq('對照：單位代碼', Object.keys(SD.UNIT_OF_DZY).sort(), ['ck', 'dzy-hq', 'mala-gf', 'mala-hq', 'mzt-gf', 'mzt-hq', 'mzt-js', 'mzt-lzl', 'mzt-rg', 'mzt-wx']);
+eq('對照：瑞光、文心歸墨竹亭並各自一個門市（2026-11-18）', [SD.UNIT_OF_DZY['mzt-rg'], SD.UNIT_OF_DZY['mzt-wx']], [{ unit: 'mzt', store: '瑞光' }, { unit: 'mzt', store: '文心' }]);
+eq('對照：瑞光、文心沒有打卡來源（STORE_OF_SRC 不變）', ['mztrg', 'mztwx'].map((x) => SD.SRC_OF_STORE[x]), [undefined, undefined]);
+eq('對照：瑞光、文心的門市值都在前端門市清單裡', [L.STORES.mzt.indexOf('瑞光') >= 0, L.STORES.mzt.indexOf('文心') >= 0], [true, true]);
 
 // ---------- 0b. 職稱 → 總監級以上看全部品牌（2026-10-25 v0.8.0，docs/brand-visibility.md）----------
 eq('總監級以上職稱', SD.SEE_ALL_TITLES.slice().sort(), ['ceo', 'chair', 'gm', 'hm', 'odir', 'rdd']);
@@ -544,7 +547,22 @@ const bridgeOf = (got, fail) => { const b = { calls: [] }; b.call = async (op, p
       const stf = [S0('S-001', '丁', 'hq-dzy', { dzy: 'DZY004', src: 'hq:H4' })];
       const r = SD.dzyApply(stf, dir, null, NOW), u = (d) => r.staff.find((s) => s.dzy === d);
       eq('#31 mzt-hq→hq-mzt、mala-hq→hq-mala、dzy-hq→hq-dzy（新人）；既有的人單位跟著管理系統調整', [u('DZY001').unit, u('DZY002').unit, u('DZY003').unit, u('DZY004').unit, r.ch.moved], ['hq-mzt', 'hq-mala', 'hq-dzy', 'hq-mzt', ['S-001']]);
-      eq('#31 其餘單位（mzt-wx）佈告欄沒有對應→不新增', SD.dzyApply([], N([P('DZY001', '甲', 'mzt-wx', true, [])]), null, NOW).ch.skipped, ['DZY001']); }
+      eq('#31 其餘單位（mzt-mc 台中美村）佈告欄沒有對應→不新增', SD.dzyApply([], N([P('DZY001', '甲', 'mzt-mc', true, [])]), null, NOW).ch.skipped, ['DZY001']); }
+
+    // ---- 2026-11-18：內湖瑞光、台中文心（mzt-rg／mzt-wx）歸墨竹亭區 ----
+    { const dir = N([P('DZY001', '甲', 'mzt-rg', true, [['mztrg', 'R01']]), P('DZY002', '乙', 'mzt-wx', true, [['mztwx', 'W01']]), P('DZY003', '丙', 'mzt-wx', false, []), P('DZY004', '丁', 'mzt-mc', true, [])]);
+      const r = SD.dzyApply([], dir, null, NOW), u = (d) => r.staff.find((s) => s.dzy === d);
+      eq('瑞光、文心在職新人新增：unit=mzt、門市瑞光／文心；src 空（沒有打卡來源）、沒有 LINE 雜湊', [u('DZY001').unit, u('DZY001').store, u('DZY001').src, u('DZY001').lineHash, u('DZY002').unit, u('DZY002').store, u('DZY002').src], ['mzt', '瑞光', '', '', 'mzt', '文心', '']);
+      eq('離職的不新增；台中美村（mzt-mc）照舊不新增', [!!u('DZY003'), !!u('DZY004'), r.ch.added.length, r.ch.skipped], [false, false, 2, ['DZY004']]);
+      eq('新人沒有密碼（要用管理系統公告專區自動登入或主管產啟用碼）、S 編號接續', [u('DZY001').pinHash, u('DZY001').id, u('DZY002').id], ['', 'S-001', 'S-002']);
+      // 既有的人（例：先前歸總部、手動建在墨竹亭但沒分店）單位跟著管理系統調成瑞光；同單位再跑一次不變（冪等）
+      const stf = [S0('S-001', '甲', 'hq-mzt', { dzy: 'DZY001' }), S0('S-002', '乙', 'mzt', { dzy: 'DZY002', store: '' })];
+      const r2 = SD.dzyApply(stf, N([P('DZY001', '甲', 'mzt-rg', true, []), P('DZY002', '乙', 'mzt-wx', true, [])]), null, NOW);
+      eq('既有的人搬到瑞光／文心', [by(r2, 'S-001').unit, by(r2, 'S-001').store, by(r2, 'S-002').unit, by(r2, 'S-002').store, r2.ch.moved], ['mzt', '瑞光', 'mzt', '文心', ['S-001', 'S-002']]);
+      const r3 = SD.dzyApply(r2.staff, N([P('DZY001', '甲', 'mzt-rg', true, []), P('DZY002', '乙', 'mzt-wx', true, [])]), null, NOW);
+      eq('再跑一次沒有變動', [r3.changed, r3.ch.added, r3.ch.moved], [[], [], []]);
+      // 瑞光的人看得到、要簽墨竹亭公告，看不到小辛辣（品牌可見度照 unit=mzt）
+      eq('瑞光同仁：看得到墨竹亭、要簽墨竹亭公告；看不到小辛辣公告', [L.canSee('mzt', { units: ['mzt'] }, false), L.mustSign('mzt', { units: ['mzt'] }), L.canSee('mzt', { units: ['mala'] }, false)], [true, true, false]); }
 
     useRows();
     // ---- G8：可切換旗標只有 canRetire 才寫；沒有就當 clock；mirror 自動雙跑 ----

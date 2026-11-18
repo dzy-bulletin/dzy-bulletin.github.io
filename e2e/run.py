@@ -110,7 +110,8 @@ def main():
         def expect_stores(grp):
             lst = [s for s in W.active_staff() if s['unit'] == grp]
             names = D.STORES[grp] + (['未分店'] if any(store_of(s) == '未分店' for s in lst) else [])
-            return ['%s %d 人' % (n, sum(1 for s in lst if store_of(s) == n)) for n in names]
+            cnt = lambda n: sum(1 for s in lst if store_of(s) == n)
+            return ['%s %d 人' % (n, cnt(n)) for n in names if cnt(n) > 0]   # 0 人的門市不列（js/staff.js）
         def expect_picker(grp, store=None):
             out = []
             for s in W.active_staff():

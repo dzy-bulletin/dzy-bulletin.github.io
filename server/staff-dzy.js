@@ -31,8 +31,10 @@ const SRC_OF_STORE = {}; Object.keys(STORE_OF_SRC).forEach((k) => { SRC_OF_STORE
 const UNIT_OF_DZY = {
   'mala-gf': { unit: 'mala', store: '' }, 'mzt-js': { unit: 'mzt', store: '金山' }, 'mzt-gf': { unit: 'mzt', store: '光復' },
   'mzt-lzl': { unit: 'mzt', store: '六張犁' }, 'ck': { unit: 'cf', store: '' },
+  // 2026-11-18 Eason：內湖瑞光、台中文心加進佈告欄（歸墨竹亭區）。這兩家沒有打卡來源（STORE_OF_SRC 沒有 mztrg／mztwx）→ 新人 src 為空、不吃打卡 LINE 綁定，靠管理系統公告專區自動登入
+  'mzt-rg': { unit: 'mzt', store: '瑞光' }, 'mzt-wx': { unit: 'mzt', store: '文心' },
   // 總部（org 單位代碼見 dzy apps-script/platform/Staff.gs 預設資料）：墨竹亭總部／小辛辣總部對得到佈告欄的總部組別；鼎兆元總部（dzy-hq）底下分部門，
-  // 管理系統不分三組 → 既有的維持原組別、新人先歸 hq-dzy。其餘單位（mzt-wx／mzt-rg／mzt-mc／yiwu-*）佈告欄沒有對應單位，不新增、單位不動
+  // 管理系統不分三組 → 既有的維持原組別、新人先歸 hq-dzy。其餘單位（mzt-mc 台中美村／yiwu-*）佈告欄沒有對應單位，不新增、單位不動
   'mzt-hq': { hq: true, hqUnit: 'hq-mzt' }, 'mala-hq': { hq: true, hqUnit: 'hq-mala' }, 'dzy-hq': { hq: true }
 };
 // 總監級以上（2026-10-25 v0.8.0，docs/brand-visibility.md）：管理系統職稱代碼在這裡的人，佈告欄三個品牌分頁都看得到（seeAll）。
