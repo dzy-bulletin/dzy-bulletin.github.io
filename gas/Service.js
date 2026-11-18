@@ -6,6 +6,8 @@
  * clockSrc（選用）: read() → { rows:[{src, unit, empId, name, active, lineHash}], errors:[字串], sources:[來源] }（打卡系統名單，唯讀；
  *   lineHash＝SHA-256('dzyb-line:' + LINE userId)，原始 userId 不離開 Apps Script）
  * opts（選用）: { staffSource: 'clock'|'dzy', dzyRedeem: { redeem(ticket, aud) → 平台兌換結果 {emp_no} ／ {admin:true, emp_no, uid, name}，券無效＝null } }
+ *   adminPasscode：false＝停用「管理通行碼」登入（2026-11-18 Eason 指示；adminLogin 一律拒絕、既有 A 種憑證不再被接受，只剩管理系統換來的 D 憑證）；
+ *     沒帶或 true＝維持舊行為（單元測試、本機假資料 js/mock.js 用）。正式入口（server/index.js、gas/Code.js）一律明確傳入，預設停用
  *   dzyRedeem＝管理系統「公告專區」入場券兌換（2026-10-16；Mac mini 用 async 墊片打本機平台 svcSsoRedeem、本機假資料認 'e2e0…###'；GAS 沒有＝DZY_OFF）
  * lineVerify（選用）: verify(idToken) → 驗證過的 LINE userId（sub）或 null（LINE ID token 驗證；Mac mini 用 async 墊片、GAS 用 UrlFetchApp、本機假資料認 'TEST:<uid>'） */
 'use strict';
@@ -14,6 +16,8 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify, opts) 
   // opts.staffSource（選用）：'clock'（預設，今天行為）｜'dzy'（同仁名單改讀管理系統：沒有打卡同步，由 Mac mini 的 server/staff-dzy.js 同步）
   var staffSource = opts && opts.staffSource === 'dzy' ? 'dzy' : 'clock';
   var dzyRedeem = opts && opts.dzyRedeem ? opts.dzyRedeem : null;
+  var passcodeOn = !(opts && opts.adminPasscode === false);                      // 只有明確傳 false 才停用
+  var PASSCODE_OFF_MSG = '通行碼登入已停用，請從管理系統進入';
   var ADMIN_TOKEN_MS = 7 * 24 * 3600e3;
   var DZY_ADMIN_TOKEN_MS = 8 * 3600e3;    // 管理系統公告專區換來的管理憑證：8 小時（2026-10-17）   // 主管登入記住 7 天（2026-09-30 Eason 指定；原 12 小時）
   function err(code, message) { var e = new Error(message || code); e.code = code; return e; }
@@ -42,9 +46,11 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify, opts) 
   // full＝這個動作要通行碼等級（'A'）的憑證；管理系統換來的（'D'）只能管公告（審查 #44-1：同仁名單、打卡同步不給 'D'）
   function requireAdmin(req, full) {
     var a = store.getAdmin();
-    if (a.init) throw err('AUTH', '管理通行碼已更換，請重新登入');     // Eason 填了新 ADMIN_INIT：所有舊登入立即失效
+    // 通行碼更換待生效（ADMIN_INIT）只在通行碼登入開著時才管：停用後通行碼這套不存在，不能反過來卡住管理系統換來的 D 憑證
+    if (passcodeOn && a.init) throw err('AUTH', '管理通行碼已更換，請重新登入');     // Eason 填了新 ADMIN_INIT：所有舊登入立即失效
     var kind = auth.verifyAdminToken(store.secret(), req.atoken, a.ver, clock.nowMs());
-    if (!kind) throw err('AUTH', '請重新輸入管理通行碼');
+    if (!kind) throw err('AUTH', passcodeOn ? '請重新輸入管理通行碼' : '登入已失效，請從管理系統重新進入');
+    if (kind === 'A' && !passcodeOn) throw err('AUTH', PASSCODE_OFF_MSG);     // 通行碼已停用：舊的 A 種憑證（7 天效期）立即失效
     if (full && kind !== 'A') throw err('FORBIDDEN', '這個功能不能從管理系統使用');
     return a;
   }
@@ -195,7 +201,7 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify, opts) 
       if (!got || got.admin !== true) throw err('DZY_BAD', '管理系統登入驗證失敗，請重新整理再試');
       var a = store.getAdmin();
       // 主管通行碼更換待生效（ADMIN_INIT）時所有管理憑證都無效，換了也用不了：直接說清楚（審查 #44-6；處理見 server/DEPLOY.md）
-      if (a.init) throw err('ADMIN_INIT', '主管通行碼更換還沒完成，暫時不能管理公告，請聯絡資訊部');
+      if (passcodeOn && a.init) throw err('ADMIN_INIT', '主管通行碼更換還沒完成，暫時不能管理公告，請聯絡資訊部');
       var atoken = auth.makeAdminToken(store.secret(), a.ver, clock.nowMs() + DZY_ADMIN_TOKEN_MS, 'D');
       var who = String(got.emp_no || got.uid || '').slice(0, 40), name = String(got.name || '').slice(0, 40);
       log('管理系統登入', who, name + '（公告專區）');
@@ -220,6 +226,7 @@ function makeService_(L, store, files, auth, clock, clockSrc, lineVerify, opts) 
       return { at: at };
     },
     adminLogin: function (q) {
+      if (!passcodeOn) throw err('PASSCODE_OFF', PASSCODE_OFF_MSG);   // 最先擋：不比對、不累計連錯、不消化待生效的 ADMIN_INIT，資料庫的雜湊原樣保留（要恢復只開開關）
       var a = store.getAdmin();
       // 通行碼只能由 Eason 在 Apps Script「指令碼屬性」填 ADMIN_INIT 設定或更換（網頁沒有變更功能）。
       // 偵測到 ADMIN_INIT：轉成雜湊、刪掉原文；若是更換（原本已有通行碼），版本 +1 讓所有舊的管理登入失效。

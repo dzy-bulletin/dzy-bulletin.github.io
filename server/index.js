@@ -77,7 +77,11 @@ function config(env) {
     DZY_PER_MIN: Number(env.DZY_LOGIN_PER_MIN) > 0 ? Math.floor(Number(env.DZY_LOGIN_PER_MIN)) : 10,
     DZY_GLOBAL_PER_MIN: Number(env.DZY_LOGIN_GLOBAL_PER_MIN) > 0 ? Math.floor(Number(env.DZY_LOGIN_GLOBAL_PER_MIN)) : 40,   // 要低於平台每分鐘上限（120），留空間給名單同步
     // 管理系統入場券兌換（dzyLogin）：與 staff-dzy.js 同一組本機平台網址＋服務金鑰
-    DZY: { url: String(env.DZY_PLATFORM_URL || '').trim(), key: String(env.BULLETIN_SVC_KEY || '') }
+    DZY: { url: String(env.DZY_PLATFORM_URL || '').trim(), key: String(env.BULLETIN_SVC_KEY || '') },
+    // 管理通行碼登入（adminLogin／A 種憑證）：2026-11-18 起停用，正式機預設關（Eason 指示：公告管理只走管理系統 dzyAdminLogin）。
+    // 緊急退回：server/.env 加 ADMIN_PASSCODE_LOGIN=1 並重啟，或在資料夾建空檔 ADMIN_PASSCODE_ON（不用重啟，下一個請求就生效）。
+    // E2E 測試模式（絕不會與正式機並存）沒設時預設開，整套測試才登得進設定頁；要測停用狀態就明確設 ADMIN_PASSCODE_LOGIN=0
+    ADMIN_PASSCODE: env.ADMIN_PASSCODE_LOGIN !== undefined ? String(env.ADMIN_PASSCODE_LOGIN).trim() === '1' : E2E
   };
 }
 // 兩個路徑是否指同一個資料夾：存在就取真實路徑（解開符號連結），macOS APFS 預設不分大小寫，所以一律小寫比對（第 2 輪建議 3）
@@ -141,6 +145,7 @@ function makeApp(cfg) {
   const ts = () => new Date().toISOString();
   // 同仁名單來源：STAFF_SOURCE=dzy 而且搬家腳本通過（kv 旗標）才算 dzy，否則一律 clock（今天行為）。回退＝改回 clock、重啟
   const staffSource = () => effectiveSource(cfg, (k) => store.kvGet(k));
+  const passcodeOn = () => cfg.ADMIN_PASSCODE || fs.existsSync(path.join(DATA_DIR, 'ADMIN_PASSCODE_ON'));   // 每個請求都看：建／刪檔立即生效
   { const w = sourceWarning(cfg, (k) => store.kvGet(k)); if (w) console.error(ts() + ' ' + w); }
 
   // ---- 雲端空間：請求路徑只讀 kv 快取，背景每 10 分鐘刷新（請求永遠不碰 Google）----
@@ -236,7 +241,7 @@ function makeApp(cfg) {
     for (let round = 0; round < 3; round++) {
       pre.need = null; pre.revoke = [];
       const sh = shims(pre);
-      const svc = makeService_(L, store, sh.files, auth, clock, sh.clockSrc, sh.lineVerify, { staffSource: staffSource(), dzyRedeem: sh.dzyRedeem });
+      const svc = makeService_(L, store, sh.files, auth, clock, sh.clockSrc, sh.lineVerify, { staffSource: staffSource(), dzyRedeem: sh.dzyRedeem, adminPasscode: passcodeOn() });
       const out = WRITE.has(action)
         ? store.tx(() => { if (frozen()) return MOVED; store.purgeReqs(Date.now()); return svc.call(action, structuredClone(q)); })
         : svc.call(action, structuredClone(q));

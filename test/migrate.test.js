@@ -44,7 +44,7 @@ function runJob(script, args, env) {
 }
 async function startServer(dir) {   // 正式模式（非 E2E）、沒有橋接：只測資料層與登入憑證
   const port = await freePort();
-  const p = spawn(process.execPath, [path.join(ROOT, 'server/index.js')], { env: { PATH: process.env.PATH, DZYB_NO_DOTENV: '1', HOME: tmp('dzyb-home-'), PORT: String(port), DATA_DIR: dir, ALLOW_ORIGIN: '' }, stdio: ['ignore', 'pipe', 'pipe'] });
+  const p = spawn(process.execPath, [path.join(ROOT, 'server/index.js')], { env: { PATH: process.env.PATH, DZYB_NO_DOTENV: '1', HOME: tmp('dzyb-home-'), PORT: String(port), DATA_DIR: dir, ALLOW_ORIGIN: '', ADMIN_PASSCODE_LOGIN: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });   // 本測驗證「搬遷帶過來的通行碼雜湊與 atoken 版本」，所以明確開著通行碼登入（正式機預設停用）
   procs.push(p);
   let out = '';
   p.stdout.on('data', (c) => { out += c; }); p.stderr.on('data', () => {});
