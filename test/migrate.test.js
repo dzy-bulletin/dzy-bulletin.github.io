@@ -44,7 +44,7 @@ function runJob(script, args, env) {
 }
 async function startServer(dir) {   // 正式模式（非 E2E）、沒有橋接：只測資料層與登入憑證
   const port = await freePort();
-  const p = spawn(process.execPath, [path.join(ROOT, 'server/index.js')], { env: { PATH: process.env.PATH, DZYB_NO_DOTENV: '1', HOME: tmp('dzyb-home-'), PORT: String(port), DATA_DIR: dir, ALLOW_ORIGIN: '' }, stdio: ['ignore', 'pipe', 'pipe'] });
+  const p = spawn(process.execPath, [path.join(ROOT, 'server/index.js')], { env: { PATH: process.env.PATH, DZYB_NO_DOTENV: '1', HOME: tmp('dzyb-home-'), PORT: String(port), DATA_DIR: dir, ALLOW_ORIGIN: '', ADMIN_PASSCODE_LOGIN: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });   // 本測驗證「搬遷帶過來的通行碼雜湊與 atoken 版本」，所以明確開著通行碼登入（正式機預設停用）
   procs.push(p);
   let out = '';
   p.stdout.on('data', (c) => { out += c; }); p.stderr.on('data', () => {});
@@ -69,7 +69,7 @@ async function main() {
   const FG = makeFakeGas();
   const URL0 = await FG.listen();
   const KEY = 'k'.repeat(40), SECRET = 'test-secret-migrate-0123456789';   // 測試用假值（非正式）
-  Object.assign(FG.props, { BRIDGE_KEY: KEY, PRIMARY: 'gas', TOKEN_SECRET: SECRET, ADMIN_INIT: 'admin-pass-99' });
+  Object.assign(FG.props, { BRIDGE_KEY: KEY, PRIMARY: 'gas', TOKEN_SECRET: SECRET, ADMIN_INIT: 'admin-pass-99', ADMIN_PASSCODE_LOGIN: '1' });   // GAS 回退版預設停用通行碼；本測試驗搬遷帶過來的通行碼雜湊，所以明確打開
   const doPost = (b) => JSON.parse(FG.G.doPost({ postData: { contents: JSON.stringify(b) } }).getContent());
   const atoken = doPost({ action: 'adminLogin', pass: 'admin-pass-99' }).data.atoken;
   const today = FG.G.DZYB.today();

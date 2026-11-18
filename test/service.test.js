@@ -2,7 +2,7 @@
 'use strict';
 global.DZYB = require('../js/logic.js');
 global.makeAuth_ = require('../gas/Auth.js').makeAuth_;
-global.makeService_ = require('../gas/Service.js').makeService_;
+global.makeService_ = ((mk) => (L, st, f, a, c, cs, lv, o) => mk(L, st, f, a, c, cs, lv, Object.assign({ adminPasscode: true }, o)))(require('../gas/Service.js').makeService_);   // 服務層預設停用通行碼；本測試用通行碼，明確傳 true
 global.DZYB_DEMO = require('../js/demo-data.js');
 global.DZYB_SHA256 = require('../js/sha256.js');             // 本機假後端的 lineHash 用真的 SHA-256（與正式後端相同）
 // DRIVER=server：同一套契約測試改打真的 Mac mini 伺服器（需先以 E2E=1 啟動，SERVER=http://127.0.0.1:8793）

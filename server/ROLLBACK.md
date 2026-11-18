@@ -246,8 +246,10 @@ curl -s "https://dzy-bulletin.github.io/$V" | grep -E "VERSION|GAS_URL"
 - [ ] 打開一則**舊公告**的回條（最好是 Mac mini 期間有人簽的），簽名圖看得到，含 Mac mini 期間簽的。例外（本來就看不到，不算失敗）：
   - 第 2 步 missing／bad／skipped 清單裡的那幾筆。
   - 切換時 migrate「簽名圖」列為讀不到的那幾筆（CUTOVER 第 3 步記在 #10 的清單）：它們在 Mac mini 上 `sigId` 是空白，不會出現在 missing／bad 清單，但 GAS 上一樣讀不到。
-- [ ] 主管不重新登入就能開設定頁（secret 兩邊相同，舊的 atoken 仍有效）。
-  - 例外：Mac mini 期間若用 `ADMIN_INIT.txt` 換過通行碼，GAS 不知道新通行碼，主管要用舊通行碼登入。
+- [ ] **管理通行碼登入維持停用**（2026-11-18 起）：退回 Google 後 `adminLogin` 仍回 `PASSCODE_OFF`，舊的 A 憑證也不被接受（前提：GAS 已推上含 `serviceOpts_()` 的版本，見下方「退回前必做」）；**不要驗「主管不重新登入就能開設定頁」**。
+  - 退回到 Google 期間，GAS 沒有管理系統入場券兌換（`dzyAdminLogin` 回 `DZY_OFF`），正式網址也沒有設定頁入口，所以**退回期間沒有公告管理入口**：要上架／下架公告，請用緊急方式（下一段）或先切回 Mac mini。
+  - 真的要在退回期間開通行碼：到 Apps Script「專案設定 → 指令碼屬性」新增 `ADMIN_PASSCODE_LOGIN` = `1`（立即生效）；通行碼就是 GAS 上的雜湊（Mac mini 期間若用 `ADMIN_INIT.txt` 換過，GAS 不知道，要用舊通行碼）。**風險：知道通行碼的人不在管理系統權限名單上、權限比名單上的人大；事後務必刪掉這個屬性**。
+  - **退回前必做（GAS 線上版目前仍是舊程式，沒有停用）**：由 MacBook 把這版 `gas/` 用 `clasp push -f` ＋ `clasp deploy -i <部署ID>` 推上去（帳號 madesiaosinla，見 dzy-bulletin skill）。沒推就退回＝通行碼登入在 GAS 上是開著的。
 - [ ] Mac mini：`counts` 與第 1 步相同，代表 Mac mini 沒再收到任何寫入。
 - [ ] Eason 在 LINE 群發回退公告，文案見 [`CUTOVER.md`](CUTOVER.md)〈1. LINE 公告〉的第三則。
 
@@ -339,7 +341,7 @@ curl -s "https://dzy-bulletin.github.io/$V" | grep -E "VERSION|GAS_URL"
    - 確認 `ls "$(dirname "$DATA_DIR")"/dzy-bulletin-export-*.json` 沒有殘留。
    - `bulletin.db.before-migrate-*` 也含密碼雜湊，觀察幾天沒問題後也要刪。
 
-**注意**：Mac mini 期間若換過管理通行碼（`ADMIN_INIT.txt`），再切回之後會變回 GAS 上的舊通行碼，因為搬過來的是 GAS 的雜湊。要改就再放一次 `ADMIN_INIT.txt`。
+**注意**：管理通行碼登入已於 2026-11-18 停用（回退後也維持停用，開法與風險見第 6 節）。Mac mini 期間若換過管理通行碼（`ADMIN_INIT.txt`），再切回之後會變回 GAS 上的舊通行碼，因為搬過來的是 GAS 的雜湊；通行碼停用時這點不影響任何人。
 
 **失敗處理**
 - migrate 有 ❌：

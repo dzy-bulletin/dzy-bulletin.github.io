@@ -102,7 +102,7 @@ var DZYB_MOCK = (function () {
   } };
   // 本機假資料的 LINE 驗證：只認 'TEST:<uid>'（line.html?mode=local&test_uid=… 用），其他一律當驗證失敗
   var lineVerify = { verify: function (tok) { var m = /^TEST:(.{1,64})$/.exec(String(tok || '')); return m ? m[1] : null; } };
-  var svc = G.makeService_(L, store, files, auth, clock, clockSrc, lineVerify);
+  var svc = G.makeService_(L, store, files, auth, clock, clockSrc, lineVerify, { adminPasscode: true });   // 本機假資料（只在 DEV 用）要能用通行碼登入；正式入口預設停用
 
   return {
     call: function (action, req) {

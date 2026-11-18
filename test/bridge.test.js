@@ -178,6 +178,12 @@ const srv = http.createServer((req, res) => {
   eq('bridge.js 客戶端：金鑰錯 → 伺服器自己的 BRIDGE 碼（不原樣回 AUTH）', await codeOf(makeBridge(URL0, 'z'.repeat(40)).files.quota()), 'BRIDGE|AUTH');
 
   // ===== 驗收 2：PRIMARY=mini 時 ack 回 MOVED、board 照常；PRIMARY=gas 時照舊 =====
+  // 真的 gas/Code.js 入口（Google 回退版）：沒設 ADMIN_PASSCODE_LOGIN 指令碼屬性＝通行碼登入停用；A 憑證也不能用（2026-11-18）
+  { const noFlag = doPost({ action: 'adminLogin', pass: 'x' }), tkA = vm.runInContext('makeAuth_(gasCrypto_(), DZYB)', G).makeAdminToken(props.TOKEN_SECRET, props.ADMIN_VER, Date.now() + 3600e3);
+    eq('Code.js 入口：預設（沒設屬性）adminLogin 停用', noFlag.code, 'PASSCODE_OFF');
+    eq('Code.js 入口：預設 A 憑證被拒', doPost({ action: 'adminData', atoken: tkA }).code, 'AUTH');
+    props.ADMIN_PASSCODE_LOGIN = '1';   // 以下驗收 2～ 要用 A 憑證（開關打開才有）；用完刪掉
+  }
   props.PRIMARY = 'gas';
   const code0 = doPost({ action: 'staffIssueCode', atoken: vm.runInContext('makeAuth_(gasCrypto_(), DZYB)', G).makeAdminToken(props.TOKEN_SECRET, props.ADMIN_VER, Date.now() + 3600e3), staffId: 'S-001' }).data.code;
   let r = doPost({ action: 'setPin', staffId: 'S-001', pin: '2580', code: code0 });

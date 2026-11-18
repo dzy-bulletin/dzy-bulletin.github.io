@@ -3,7 +3,7 @@
 const crypto = require('crypto');
 const L = require('../js/logic.js');
 const { makeAuth_ } = require('../gas/Auth.js');
-const { makeService_ } = require('../gas/Service.js');
+const makeService_ = ((mk) => (L, st, f, a, c, cs, lv, o) => mk(L, st, f, a, c, cs, lv, Object.assign({ adminPasscode: true }, o)))(require('../gas/Service.js').makeService_);   // 服務層預設停用通行碼；這支測試要用通行碼，明確傳 true
 
 let pass = 0, fail = 0;
 function eq(name, got, want) {
